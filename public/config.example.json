@@ -1,0 +1,25 @@
+{
+  "appName": "Permissionless Euler Interface",
+  "defaultChainId": 1,
+  "eulerApi": {
+    "baseUrl": "/euler-api",
+    "v3BaseUrl": "https://v3.euler.finance",
+    "tokenImagesBaseUrl": "https://token-images.euler.finance",
+    "labelsBaseUrl": "https://labels.euler.finance/master",
+    "labelsImagesBaseUrl": "https://raw.githubusercontent.com/euler-xyz/euler-labels/master"
+  },
+  "walletConnectProjectId": "",
+  "chains": [
+    { "chainId": 1, "name": "ethereum", "label": "Ethereum", "rpcUrl": "https://ethereum-rpc.publicnode.com" },
+    { "chainId": 8453, "name": "base", "label": "Base", "rpcUrl": "https://base-rpc.publicnode.com" },
+    { "chainId": 42161, "name": "arbitrum", "label": "Arbitrum", "rpcUrl": "https://arbitrum-one-rpc.publicnode.com" },
+    { "chainId": 130, "name": "unichain", "label": "Unichain", "rpcUrl": "https://unichain-rpc.publicnode.com" },
+    { "chainId": 137, "name": "polygon", "label": "Polygon", "rpcUrl": "https://polygon-bor-rpc.publicnode.com" },
+    { "chainId": 56, "name": "bsc", "label": "BNB Chain", "rpcUrl": "https://bsc-rpc.publicnode.com" },
+    { "chainId": 43114, "name": "avalanche", "label": "Avalanche", "rpcUrl": "https://avalanche-c-chain-rpc.publicnode.com" },
+    { "chainId": 143, "name": "monad", "label": "Monad", "rpcUrl": "https://rpc.monad.xyz" },
+    { "chainId": 999, "name": "hyperevm", "label": "HyperEVM", "rpcUrl": "https://rpc.hyperliquid.xyz/evm" },
+    { "chainId": 9745, "name": "plasma", "label": "Plasma", "rpcUrl": "https://rpc.plasma.to" },
+    { "chainId": 59144, "name": "linea", "label": "Linea", "rpcUrl": "https://rpc.linea.build" }
+  ]
+}
