@@ -1,23 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useConnectModal } from '@rainbow-me/rainbowkit';
-import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  InputBase,
-  Link,
-  Paper,
-  Stack,
-  Typography,
-  useTheme
-} from '@mui/material';
+import { Alert, Box, Button, CircularProgress, InputBase, Link, Paper, Stack, Typography, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Address, BaseError, Hex, encodeFunctionData, formatUnits, parseUnits, zeroAddress } from 'viem';
 import { useAccount, usePublicClient, useReadContracts, useSwitchChain, useWriteContract } from 'wagmi';
@@ -90,13 +73,8 @@ export default function BorrowForm({
   const [hash, setHash] = useState<Address>();
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
-  const [termsOpen, setTermsOpen] = useState(false);
-  const [termsChecked, setTermsChecked] = useState(false);
-  const [termsAccepted, setTermsAccepted] = useState(false);
 
   const borrowVault = liabilityVault.address as Address;
-  const termsKey = address ? `euler-interface-terms:${address.toLowerCase()}` : '';
-  useEffect(() => setTermsAccepted(Boolean(termsKey && localStorage.getItem(termsKey) === 'accepted')), [termsKey]);
 
   const reads = useReadContracts({
     allowFailure: true,
@@ -171,7 +149,6 @@ export default function BorrowForm({
   const submit = async () => {
     if (!address) return openConnectModal?.();
     if (wrongNetwork) return switchChainAsync({ chainId });
-    if (!termsAccepted) return setTermsOpen(true);
     if (!publicClient || !canSubmit || busy) return;
     if (!evc) {
       setMessage('Could not resolve the vault connector (EVC). Try again in a moment.');
@@ -269,13 +246,6 @@ export default function BorrowForm({
     }
   };
 
-  const acceptTerms = () => {
-    if (!termsKey || !termsChecked) return;
-    localStorage.setItem(termsKey, 'accepted');
-    setTermsAccepted(true);
-    setTermsOpen(false);
-  };
-
   const buttonLabel = busy
     ? (
         {
@@ -286,15 +256,13 @@ export default function BorrowForm({
           idle: ''
         } as Record<Step, string>
       )[step]
-    : !termsAccepted
-      ? 'Accept Terms Of Use'
-      : !address
-        ? 'Connect wallet'
-        : wrongNetwork
-          ? 'Switch network'
-          : needsApprove
-            ? `Approve ${collateralAsset.symbol}`
-            : `Borrow ${liabilityVault.asset.symbol}`;
+    : !address
+      ? 'Connect wallet'
+      : wrongNetwork
+        ? 'Switch network'
+        : needsApprove
+          ? `Approve ${collateralAsset.symbol}`
+          : `Borrow ${liabilityVault.asset.symbol}`;
 
   return (
     <Stack spacing={2}>
@@ -360,33 +328,12 @@ export default function BorrowForm({
         color="secondary"
         size="large"
         onClick={submit}
-        disabled={busy || (termsAccepted && Boolean(address) && !wrongNetwork && !canSubmit)}
+        disabled={busy || (Boolean(address) && !wrongNetwork && !canSubmit)}
         sx={{ minHeight: 48, fontWeight: 600 }}
       >
         {busy && <CircularProgress size={18} color="inherit" sx={{ marginRight: 1 }} />}
         {buttonLabel}
       </Button>
-
-      <Dialog open={termsOpen} onClose={() => setTermsOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Terms of use</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ marginBottom: 2 }}>
-            Borrowing opens a debt position against your collateral and can be liquidated if its value falls. Transactions are submitted
-            directly from your wallet through the Euler Vault Connector. Review the amounts, network, approvals and wallet simulation before
-            signing.
-          </Typography>
-          <FormControlLabel
-            control={<Checkbox checked={termsChecked} onChange={(event) => setTermsChecked(event.target.checked)} />}
-            label="I understand the liquidation risk and accept the terms of use."
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setTermsOpen(false)}>Cancel</Button>
-          <Button variant="contained" color="secondary" onClick={acceptTerms} disabled={!termsChecked}>
-            Accept
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }

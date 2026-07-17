@@ -1,23 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useConnectModal } from '@rainbow-me/rainbowkit';
-import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  InputBase,
-  Link,
-  Paper,
-  Stack,
-  Typography,
-  useTheme
-} from '@mui/material';
+import { Alert, Box, Button, CircularProgress, InputBase, Link, Paper, Stack, Typography, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Address, BaseError, formatUnits, parseUnits } from 'viem';
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useSwitchChain, useWriteContract } from 'wagmi';
@@ -72,19 +55,10 @@ export default function EarnVaultActionForm({ mode, vault, chainId, assetPriceUs
   const [transactionHash, setTransactionHash] = useState<Address>();
   const [transactionMessage, setTransactionMessage] = useState('');
   const [transactionFailed, setTransactionFailed] = useState(false);
-  const [termsOpen, setTermsOpen] = useState(false);
-  const [termsChecked, setTermsChecked] = useState(false);
-  const [termsAccepted, setTermsAccepted] = useState(false);
 
   const vaultAddress = vault.address as Address;
   const assetAddress = vault.asset.address as Address;
   const accountAddress = address as Address | undefined;
-  const termsKey = accountAddress ? `euler-interface-terms:${accountAddress.toLowerCase()}` : '';
-
-  useEffect(() => {
-    setTermsAccepted(Boolean(termsKey && localStorage.getItem(termsKey) === 'accepted'));
-    setTermsChecked(false);
-  }, [termsKey]);
 
   useEffect(() => {
     setInputAmount('');
@@ -247,10 +221,6 @@ export default function EarnVaultActionForm({ mode, vault, chainId, assetPriceUs
       await switchChainAsync({ chainId });
       return;
     }
-    if (!termsAccepted) {
-      setTermsOpen(true);
-      return;
-    }
     if (amountRaw <= 0n || amountExceedsBalance || busy) return;
 
     setTransactionHash(undefined);
@@ -280,13 +250,6 @@ export default function EarnVaultActionForm({ mode, vault, chainId, assetPriceUs
     }
   };
 
-  const acceptTerms = () => {
-    if (!termsKey || !termsChecked) return;
-    localStorage.setItem(termsKey, 'accepted');
-    setTermsAccepted(true);
-    setTermsOpen(false);
-  };
-
   const buttonLabel = (() => {
     if (busy) {
       const labels: Record<Exclude<TransactionStep, 'idle'>, string> = {
@@ -298,14 +261,13 @@ export default function EarnVaultActionForm({ mode, vault, chainId, assetPriceUs
       };
       return labels[step as Exclude<TransactionStep, 'idle'>];
     }
-    if (!termsAccepted) return 'Accept Terms Of Use';
     if (!accountAddress) return 'Connect wallet';
     if (wrongNetwork) return 'Switch network';
     if (approvalRequired) return `Approve ${vault.asset.symbol}`;
     return mode === 'supply' ? `Supply ${vault.asset.symbol}` : `Withdraw ${vault.asset.symbol}`;
   })();
 
-  const buttonDisabled = busy || (termsAccepted && Boolean(accountAddress) && !wrongNetwork && (amountRaw <= 0n || amountExceedsBalance));
+  const buttonDisabled = busy || (Boolean(accountAddress) && !wrongNetwork && (amountRaw <= 0n || amountExceedsBalance));
   const explorerUrl = chainId === 1 && transactionHash ? `https://etherscan.io/tx/${transactionHash}` : undefined;
 
   return (
@@ -393,26 +355,6 @@ export default function EarnVaultActionForm({ mode, vault, chainId, assetPriceUs
       {mode === 'withdraw' && maxRedeem > 0n && maxWithdraw === 0n && (
         <Alert severity="info">Your shares are present, but the vault currently reports no immediately withdrawable assets.</Alert>
       )}
-
-      <Dialog open={termsOpen} onClose={() => setTermsOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Terms of use</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ marginBottom: 2 }}>
-            Transactions are submitted directly from your wallet to the Euler Earn vault. Review the asset, amount, network, approvals, and
-            wallet simulation before signing.
-          </Typography>
-          <FormControlLabel
-            control={<Checkbox checked={termsChecked} onChange={(event) => setTermsChecked(event.target.checked)} />}
-            label="I understand the risks and accept the terms of use."
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setTermsOpen(false)}>Cancel</Button>
-          <Button variant="contained" color="secondary" onClick={acceptTerms} disabled={!termsChecked}>
-            Accept
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }

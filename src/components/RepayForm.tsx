@@ -1,23 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useConnectModal } from '@rainbow-me/rainbowkit';
-import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  InputBase,
-  Link,
-  Paper,
-  Stack,
-  Typography,
-  useTheme
-} from '@mui/material';
+import { Alert, Box, Button, CircularProgress, InputBase, Link, Paper, Stack, Typography, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Address, BaseError, formatUnits, maxUint256, parseUnits } from 'viem';
 import { useAccount, usePublicClient, useReadContracts, useSwitchChain, useWriteContract } from 'wagmi';
@@ -61,17 +44,11 @@ export default function RepayForm({ chainId, liabilityVault, assetPriceUsd, toke
   const [hash, setHash] = useState<Address>();
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
-  const [termsOpen, setTermsOpen] = useState(false);
-  const [termsChecked, setTermsChecked] = useState(false);
-  const [termsAccepted, setTermsAccepted] = useState(false);
 
   const vaultAddress = liabilityVault.address;
   const assetAddress = liabilityVault.asset.address;
   const decimals = liabilityVault.asset.decimals;
   const symbol = liabilityVault.asset.symbol;
-  const termsKey = address ? `euler-interface-terms:${address.toLowerCase()}` : '';
-
-  useEffect(() => setTermsAccepted(Boolean(termsKey && localStorage.getItem(termsKey) === 'accepted')), [termsKey]);
 
   const reads = useReadContracts({
     allowFailure: true,
@@ -120,7 +97,6 @@ export default function RepayForm({ chainId, liabilityVault, assetPriceUsd, toke
   const submit = async () => {
     if (!address) return openConnectModal?.();
     if (wrongNetwork) return switchChainAsync({ chainId });
-    if (!termsAccepted) return setTermsOpen(true);
     if (!publicClient || !canSubmit || busy) return;
     setMessage('');
     setFailed(false);
@@ -178,13 +154,6 @@ export default function RepayForm({ chainId, liabilityVault, assetPriceUsd, toke
     }
   };
 
-  const acceptTerms = () => {
-    if (!termsKey || !termsChecked) return;
-    localStorage.setItem(termsKey, 'accepted');
-    setTermsAccepted(true);
-    setTermsOpen(false);
-  };
-
   const buttonLabel = busy
     ? (
         {
@@ -195,17 +164,15 @@ export default function RepayForm({ chainId, liabilityVault, assetPriceUsd, toke
           idle: ''
         } as Record<Step, string>
       )[step]
-    : !termsAccepted
-      ? 'Accept Terms Of Use'
-      : !address
-        ? 'Connect wallet'
-        : wrongNetwork
-          ? 'Switch network'
-          : needsApprove
-            ? `Approve ${symbol}`
-            : repayFull
-              ? `Repay all ${symbol}`
-              : `Repay ${symbol}`;
+    : !address
+      ? 'Connect wallet'
+      : wrongNetwork
+        ? 'Switch network'
+        : needsApprove
+          ? `Approve ${symbol}`
+          : repayFull
+            ? `Repay all ${symbol}`
+            : `Repay ${symbol}`;
 
   return (
     <Stack spacing={2}>
@@ -276,32 +243,12 @@ export default function RepayForm({ chainId, liabilityVault, assetPriceUsd, toke
         color="secondary"
         size="large"
         onClick={submit}
-        disabled={busy || (termsAccepted && Boolean(address) && !wrongNetwork && !canSubmit)}
+        disabled={busy || (Boolean(address) && !wrongNetwork && !canSubmit)}
         sx={{ minHeight: 48, fontWeight: 600 }}
       >
         {busy && <CircularProgress size={18} color="inherit" sx={{ marginRight: 1 }} />}
         {buttonLabel}
       </Button>
-
-      <Dialog open={termsOpen} onClose={() => setTermsOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Terms of use</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ marginBottom: 2 }}>
-            Repaying transfers {symbol} from your wallet to the Euler vault to reduce this position's debt. Review the amount, network,
-            approvals and wallet simulation before signing.
-          </Typography>
-          <FormControlLabel
-            control={<Checkbox checked={termsChecked} onChange={(event) => setTermsChecked(event.target.checked)} />}
-            label="I understand the risks and accept the terms of use."
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setTermsOpen(false)}>Cancel</Button>
-          <Button variant="contained" color="secondary" onClick={acceptTerms} disabled={!termsChecked}>
-            Accept
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }

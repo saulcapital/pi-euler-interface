@@ -1,23 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useConnectModal } from '@rainbow-me/rainbowkit';
-import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  InputBase,
-  Link,
-  Paper,
-  Stack,
-  Typography,
-  useTheme
-} from '@mui/material';
+import { Alert, Box, Button, CircularProgress, InputBase, Link, Paper, Stack, Typography, useTheme } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Address, BaseError, formatUnits, parseUnits } from 'viem';
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useSwitchChain, useWriteContract } from 'wagmi';
@@ -80,14 +63,9 @@ export default function VaultActionForm({
   const [hash, setHash] = useState<Address>();
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
-  const [termsOpen, setTermsOpen] = useState(false);
-  const [termsChecked, setTermsChecked] = useState(false);
-  const [termsAccepted, setTermsAccepted] = useState(false);
 
-  const termsKey = address ? `euler-interface-terms:${address.toLowerCase()}` : '';
   const actionVerb = mode === 'supply' ? supplyLabel : withdrawLabel;
 
-  useEffect(() => setTermsAccepted(Boolean(termsKey && localStorage.getItem(termsKey) === 'accepted')), [termsKey]);
   useEffect(() => {
     setAmount('');
     setHash(undefined);
@@ -165,7 +143,6 @@ export default function VaultActionForm({
   const submit = async () => {
     if (!address) return openConnectModal?.();
     if (wrongNetwork) return switchChainAsync({ chainId });
-    if (!termsAccepted) return setTermsOpen(true);
     if (!publicClient || amountRaw <= 0n || exceeds || busy) return;
     setMessage('');
     setFailed(false);
@@ -237,13 +214,6 @@ export default function VaultActionForm({
     }
   };
 
-  const acceptTerms = () => {
-    if (!termsKey || !termsChecked) return;
-    localStorage.setItem(termsKey, 'accepted');
-    setTermsAccepted(true);
-    setTermsOpen(false);
-  };
-
   const buttonLabel = busy
     ? (
         {
@@ -255,15 +225,13 @@ export default function VaultActionForm({
           idle: ''
         } as Record<Step, string>
       )[step]
-    : !termsAccepted
-      ? 'Accept Terms Of Use'
-      : !address
-        ? 'Connect wallet'
-        : wrongNetwork
-          ? 'Switch network'
-          : needsApprove
-            ? `Approve ${asset.symbol}`
-            : `${actionVerb} ${asset.symbol}`;
+    : !address
+      ? 'Connect wallet'
+      : wrongNetwork
+        ? 'Switch network'
+        : needsApprove
+          ? `Approve ${asset.symbol}`
+          : `${actionVerb} ${asset.symbol}`;
 
   return (
     <Stack spacing={2}>
@@ -342,32 +310,12 @@ export default function VaultActionForm({
         color="secondary"
         size="large"
         onClick={submit}
-        disabled={busy || (termsAccepted && Boolean(address) && !wrongNetwork && (amountRaw <= 0n || exceeds))}
+        disabled={busy || (Boolean(address) && !wrongNetwork && (amountRaw <= 0n || exceeds))}
         sx={{ minHeight: 48, fontWeight: 600 }}
       >
         {busy && <CircularProgress size={18} color="inherit" sx={{ marginRight: 1 }} />}
         {buttonLabel}
       </Button>
-
-      <Dialog open={termsOpen} onClose={() => setTermsOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Terms of use</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ marginBottom: 2 }}>
-            Transactions are submitted directly from your wallet to the Euler vault. Review the amount, network, approvals and wallet
-            simulation before signing.
-          </Typography>
-          <FormControlLabel
-            control={<Checkbox checked={termsChecked} onChange={(event) => setTermsChecked(event.target.checked)} />}
-            label="I understand the risks and accept the terms of use."
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setTermsOpen(false)}>Cancel</Button>
-          <Button variant="contained" color="secondary" onClick={acceptTerms} disabled={!termsChecked}>
-            Accept
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }
