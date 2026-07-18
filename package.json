@@ -1,7 +1,8 @@
 {
-  "name": "berry-material-react-ts",
+  "name": "pi-euler-interface",
   "version": "4.1.0",
   "private": true,
+  "description": "Permissionless web interface for the Euler lending protocol by cp0x",
   "packageManager": "pnpm@10.6.2",
   "dependencies": {
     "@emotion/cache": "11.14.0",

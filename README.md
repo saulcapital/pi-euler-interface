@@ -2,7 +2,7 @@
 
 A permissionless interface for the Euler protocol, built on the Berry MUI template (React 19 + Vite + MUI 7) with wallet connectivity (wagmi + RainbowKit).
 
-The `/explore`, `/earn`, `/lend`, and Earn vault detail pages mirror their app.euler.finance counterparts with live data from Euler's public APIs. Explore renders market cards with supply/borrow/liquidity/ROE stats; Earn renders curated capital allocator vaults and each vault detail includes performance, exposure, management, and real wallet-driven ERC-4626 supply/withdraw flows. Lend lists explorable EVK debt vaults with combined base, intrinsic, and reward APY plus risk manager and collateral exposure. Dashboard, Borrow, and market detail remain boilerplate rendered from mock data in `src/mocks/`.
+The `/explore`, `/earn`, `/lend`, `/borrow`, and `/portfolio` pages mirror their app.euler.finance counterparts with live data from Euler's public APIs. Explore renders market cards with supply/borrow/liquidity/ROE stats; Earn renders curated capital allocator vaults and each vault detail includes performance, exposure, management, and real wallet-driven ERC-4626 supply/withdraw flows. Lend lists explorable EVK debt vaults with combined base, intrinsic, and reward APY plus risk manager and collateral exposure. Borrow lists (collateral, liability) pairs and its pair detail opens real positions via an EVC batch. Portfolio shows the connected account's deposits and positions with real repay/borrow/add/remove-collateral actions.
 
 ## Stack
 
@@ -60,7 +60,9 @@ Notes: the internal API rate-limits bursts per IP (temporary 403s) — the proxy
 - `/earn/vault/:vaultAddress?network=1` — live vault detail and real ERC-20 approve/ERC-4626 deposit/withdraw transactions
 - `/lend?network=1` — isolated EVK lending vaults with live APY, liquidity, utilization, risk manager, and exposure data
 - `/lend/:lendAddress?network=1` — lending market detail with live statistics, collateral markets, supply preview, approvals, and ERC-4626 deposit flow
-- `/dashboard`, `/borrow` and borrow market details — boilerplate on mock data (`src/mocks/`), action forms show a mock snackbar (`src/components/MockActionForm.tsx`)
+- `/borrow?network=1` — borrow markets as (collateral, liability) pairs with live LTV/APY data
+- `/borrow/:collateral/:liability?network=1` — pair detail with market info and a real Borrow flow (EVC batch)
+- `/portfolio` — connected account's deposits and positions (live), with the position manager at `/portfolio/position/:collateral/:liability` (real repay/borrow/collateral actions)
 
 ## Getting Started
 

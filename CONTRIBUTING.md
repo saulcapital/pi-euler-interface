@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to the Permissionless Interface Boilerplate!
+Thank you for your interest in contributing to the Permissionless Euler Interface by cp0x!
 
 # Development
 
