@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Box from '@mui/material/Box';
 import {
@@ -23,7 +23,7 @@ import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { entityLogoUrl, fetchEntities, fetchProducts, fetchVaultsBatch, fetchIntrinsicApys, tokenImageUrl } from '@/api/euler';
-import ClusterMatrix from 'components/ClusterMatrix';
+import ExploreMarketExperience, { type ExploreResolvedSummary } from 'features/explore/ExploreMarketExperience';
 import { V3VaultDetail } from 'types/euler';
 import { formatShortUSDS } from 'utils/formatters';
 import { useNetworkParam } from 'hooks/useNetworkParam';
@@ -45,6 +45,7 @@ interface ProductCard {
   maxRoe: number | null;
   maxRoePair: string | null;
   assets: { address: string; symbol: string }[];
+  memberAddresses: string[];
   vaults: V3VaultDetail[];
 }
 
@@ -57,12 +58,14 @@ export default function ExplorePage() {
   const [entityFilter, setEntityFilter] = useState<string[]>([]);
   const [assetFilter, setAssetFilter] = useState<string[]>([]);
   const [expandedSlugs, setExpandedSlugs] = useState<Set<string>>(new Set());
+  const [resolvedSummaries, setResolvedSummaries] = useState<Record<string, ExploreResolvedSummary>>({});
 
   // Filters and expansion state name entities/assets of one chain — they cannot carry over.
   useEffect(() => {
     setEntityFilter([]);
     setAssetFilter([]);
     setExpandedSlugs(new Set());
+    setResolvedSummaries({});
   }, [chainId]);
   const toggleExpanded = (slug: string) =>
     setExpandedSlugs((prev) => {
@@ -70,6 +73,18 @@ export default function ExplorePage() {
       next.has(slug) ? next.delete(slug) : next.add(slug);
       return next;
     });
+  const updateResolvedSummary = useCallback((slug: string, summary: ExploreResolvedSummary) => {
+    setResolvedSummaries((previous) => {
+      const current = previous[slug];
+      if (
+        current &&
+        Object.keys(summary).every((key) => current[key as keyof ExploreResolvedSummary] === summary[key as keyof ExploreResolvedSummary])
+      ) {
+        return previous;
+      }
+      return { ...previous, [slug]: summary };
+    });
+  }, []);
 
   const productsQuery = useQuery({ queryKey: ['euler', 'products', chainId], queryFn: () => fetchProducts(chainId) });
   const entitiesQuery = useQuery({ queryKey: ['euler', 'entities', chainId], queryFn: () => fetchEntities(chainId) });
@@ -160,6 +175,7 @@ export default function ExplorePage() {
         maxRoe,
         maxRoePair,
         assets: Array.from(assets, ([address, symbol]) => ({ address, symbol })),
+        memberAddresses: product.vaults,
         vaults
       };
     });
@@ -293,131 +309,149 @@ export default function ExplorePage() {
       )}
 
       <Stack spacing={2}>
-        {visibleCards.map((card) => (
-          <Paper
-            key={card.slug}
-            sx={{
-              padding: '20px 24px',
-              border: `1px solid ${theme.palette.divider}`,
-              transition: 'border-color 0.2s',
-              '&:hover': { borderColor: theme.palette.secondary.main }
-            }}
-          >
-            <Box
-              onClick={() => toggleExpanded(card.slug)}
-              sx={{ cursor: 'pointer' }}
-              role="button"
-              aria-expanded={expandedSlugs.has(card.slug)}
+        {visibleCards.map((card) => {
+          const resolved = resolvedSummaries[card.slug];
+          return (
+            <Paper
+              key={card.slug}
+              sx={{
+                padding: '20px 24px',
+                border: `1px solid ${theme.palette.divider}`,
+                transition: 'border-color 0.2s',
+                '&:hover': { borderColor: theme.palette.secondary.main }
+              }}
             >
-              {/* Top: entity, name, description | assets/pairs */}
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, marginBottom: 2.5 }}>
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', minWidth: 0 }}>
-                  <Avatar src={card.entityLogo} sx={{ width: 44, height: 44, fontSize: 16 }}>
-                    {(card.entityNames[0] || card.name).slice(0, 1)}
-                  </Avatar>
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
-                      {card.entityNames.join(' & ')}
-                    </Typography>
-                    <Typography variant="h3" sx={{ margin: '2px 0' }}>
-                      {card.name}
-                    </Typography>
-                    <Typography variant="body2" sx={{ color: theme.palette.grey[500] }} noWrap>
-                      {card.description}
-                    </Typography>
+              <Box
+                onClick={() => toggleExpanded(card.slug)}
+                sx={{ cursor: 'pointer' }}
+                role="button"
+                aria-expanded={expandedSlugs.has(card.slug)}
+              >
+                {/* Top: entity, name, description | assets/pairs */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, marginBottom: 2.5 }}>
+                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', minWidth: 0 }}>
+                    <Avatar src={card.entityLogo} sx={{ width: 44, height: 44, fontSize: 16 }}>
+                      {(card.entityNames[0] || card.name).slice(0, 1)}
+                    </Avatar>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
+                        {card.entityNames.join(' & ')}
+                      </Typography>
+                      <Typography variant="h3" sx={{ margin: '2px 0' }}>
+                        {card.name}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: theme.palette.grey[500],
+                          display: '-webkit-box',
+                          WebkitBoxOrient: 'vertical',
+                          WebkitLineClamp: { xs: 2, sm: 1 },
+                          overflow: 'hidden'
+                        }}
+                      >
+                        {card.description}
+                      </Typography>
+                    </Box>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, flexShrink: 0 }}>
+                    <Box sx={{ textAlign: 'right' }}>
+                      <Typography variant="body2" sx={{ color: theme.palette.grey[400] }}>
+                        {resolved?.assetCount ?? card.assetCount} assets
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
+                        {resolved?.pairCount ?? card.pairCount} pairs
+                      </Typography>
+                      {(resolved?.unknownVaults ?? card.unknownVaults) > 0 && (
+                        <Typography variant="body2" color="error">
+                          {resolved?.unknownVaults ?? card.unknownVaults} unknown
+                        </Typography>
+                      )}
+                    </Box>
+                    <ExpandMoreIcon
+                      sx={{
+                        color: theme.palette.grey[500],
+                        transition: 'transform 0.2s',
+                        transform: expandedSlugs.has(card.slug) ? 'rotate(180deg)' : 'none'
+                      }}
+                    />
                   </Box>
                 </Box>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, flexShrink: 0 }}>
-                  <Box sx={{ textAlign: 'right' }}>
-                    <Typography variant="body2" sx={{ color: theme.palette.grey[400] }}>
-                      {card.assetCount} assets
-                    </Typography>
+
+                {/* Bottom: stats | asset icon cluster */}
+                <Grid container spacing={2} alignItems="center">
+                  <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
                     <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
-                      {card.pairCount} pairs
+                      Total supply
                     </Typography>
-                    {card.unknownVaults > 0 && (
-                      <Typography variant="body2" color="error">
-                        {card.unknownVaults} unknown
+                    <Typography variant="h4">${formatShortUSDS(resolved?.totalSupplyUsd ?? card.totalSupplyUsd)}</Typography>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
+                    <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
+                      Total borrowed
+                    </Typography>
+                    <Typography variant="h4">${formatShortUSDS(resolved?.totalBorrowedUsd ?? card.totalBorrowedUsd)}</Typography>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
+                    <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
+                      Available liquidity
+                    </Typography>
+                    <Typography variant="h4">${formatShortUSDS(resolved?.availableLiquidityUsd ?? card.availableLiquidityUsd)}</Typography>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
+                        Max ROE
+                      </Typography>
+                      <Tooltip title="Estimated max return on equity for a leveraged loop at the pair's borrow LTV" arrow>
+                        <InfoOutlinedIcon sx={{ fontSize: 14, color: theme.palette.grey[600] }} />
+                      </Tooltip>
+                    </Box>
+                    {card.maxRoe !== null ? (
+                      <Typography variant="h4">
+                        {card.maxRoe.toFixed(2)}%{' '}
+                        <Typography component="span" variant="body2" sx={{ color: theme.palette.grey[500] }}>
+                          {card.maxRoePair}
+                        </Typography>
+                      </Typography>
+                    ) : (
+                      <Typography variant="h4" sx={{ color: theme.palette.grey[600] }}>
+                        —
                       </Typography>
                     )}
-                  </Box>
-                  <ExpandMoreIcon
-                    sx={{
-                      color: theme.palette.grey[500],
-                      transition: 'transform 0.2s',
-                      transform: expandedSlugs.has(card.slug) ? 'rotate(180deg)' : 'none'
-                    }}
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 12, md: 2 }}>
+                    <Box sx={{ display: 'flex', justifyContent: { md: 'flex-end', xs: 'flex-start' } }}>
+                      <AvatarGroup
+                        max={8}
+                        sx={{ '& .MuiAvatar-root': { width: 26, height: 26, fontSize: 10, border: `1px solid ${theme.palette.divider}` } }}
+                      >
+                        {card.assets.map((a) => (
+                          <Tooltip key={a.address} title={a.symbol} arrow>
+                            <Avatar src={tokenImageUrl(chainId, a.address)} alt={a.symbol}>
+                              {a.symbol.slice(0, 2).toUpperCase()}
+                            </Avatar>
+                          </Tooltip>
+                        ))}
+                      </AvatarGroup>
+                    </Box>
+                  </Grid>
+                </Grid>
+              </Box>
+              {expandedSlugs.has(card.slug) && (
+                <Box sx={{ marginTop: 2.5, paddingTop: 2.5, borderTop: `1px solid ${theme.palette.divider}` }}>
+                  <ExploreMarketExperience
+                    chainId={chainId}
+                    marketId={card.slug}
+                    memberAddresses={card.memberAddresses}
+                    vaults={card.vaults}
+                    onResolvedSummary={(summary) => updateResolvedSummary(card.slug, summary)}
                   />
                 </Box>
-              </Box>
-
-              {/* Bottom: stats | asset icon cluster */}
-              <Grid container spacing={2} alignItems="center">
-                <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
-                  <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
-                    Total supply
-                  </Typography>
-                  <Typography variant="h4">${formatShortUSDS(card.totalSupplyUsd)}</Typography>
-                </Grid>
-                <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
-                  <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
-                    Total borrowed
-                  </Typography>
-                  <Typography variant="h4">${formatShortUSDS(card.totalBorrowedUsd)}</Typography>
-                </Grid>
-                <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
-                  <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
-                    Available liquidity
-                  </Typography>
-                  <Typography variant="h4">${formatShortUSDS(card.availableLiquidityUsd)}</Typography>
-                </Grid>
-                <Grid size={{ xs: 6, sm: 3, md: 2.5 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <Typography variant="body2" sx={{ color: theme.palette.grey[500] }}>
-                      Max ROE
-                    </Typography>
-                    <Tooltip title="Estimated max return on equity for a leveraged loop at the pair's borrow LTV" arrow>
-                      <InfoOutlinedIcon sx={{ fontSize: 14, color: theme.palette.grey[600] }} />
-                    </Tooltip>
-                  </Box>
-                  {card.maxRoe !== null ? (
-                    <Typography variant="h4">
-                      {card.maxRoe.toFixed(2)}%{' '}
-                      <Typography component="span" variant="body2" sx={{ color: theme.palette.grey[500] }}>
-                        {card.maxRoePair}
-                      </Typography>
-                    </Typography>
-                  ) : (
-                    <Typography variant="h4" sx={{ color: theme.palette.grey[600] }}>
-                      —
-                    </Typography>
-                  )}
-                </Grid>
-                <Grid size={{ xs: 12, sm: 12, md: 2 }}>
-                  <Box sx={{ display: 'flex', justifyContent: { md: 'flex-end', xs: 'flex-start' } }}>
-                    <AvatarGroup
-                      max={8}
-                      sx={{ '& .MuiAvatar-root': { width: 26, height: 26, fontSize: 10, border: `1px solid ${theme.palette.divider}` } }}
-                    >
-                      {card.assets.map((a) => (
-                        <Tooltip key={a.address} title={a.symbol} arrow>
-                          <Avatar src={tokenImageUrl(chainId, a.address)} alt={a.symbol}>
-                            {a.symbol.slice(0, 2).toUpperCase()}
-                          </Avatar>
-                        </Tooltip>
-                      ))}
-                    </AvatarGroup>
-                  </Box>
-                </Grid>
-              </Grid>
-            </Box>
-            {expandedSlugs.has(card.slug) && (
-              <Box sx={{ marginTop: 2.5, paddingTop: 2.5, borderTop: `1px solid ${theme.palette.divider}` }}>
-                <ClusterMatrix chainId={chainId} vaults={card.vaults} />
-              </Box>
-            )}
-          </Paper>
-        ))}
+              )}
+            </Paper>
+          );
+        })}
       </Stack>
     </Box>
   );
