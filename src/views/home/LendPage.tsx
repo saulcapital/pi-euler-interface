@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import {
+  Alert,
   Autocomplete,
   Avatar,
   AvatarGroup,
@@ -43,8 +44,10 @@ import {
   rpcCall,
   tokenImageUrl
 } from '@/api/euler';
-import { useNetworkParam } from 'hooks/useNetworkParam';
+import { getRuntimeConfig } from '@/appconfig/runtime';
 import { ERC20_ABI, ERC4626_ABI } from '@/contracts/erc4626';
+import ChainFilter, { ChainFilterValue } from 'components/ChainFilter';
+import { ChainBadge } from 'components/ChainIcon';
 import { TokenIcon } from 'components/TokenIcon';
 import { EulerProduct, EulerVaultRewards, V3VaultDetail } from 'types/euler';
 import { formatShortUSDS } from 'utils/formatters';
@@ -57,6 +60,7 @@ interface LendExposure {
 }
 
 interface LendVaultCard {
+  chainId: number;
   address: string;
   name: string;
   marketName: string;
@@ -150,9 +154,10 @@ function UtilizationValue({ value }: { value: number }) {
 export default function LendPage() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { chainId } = useNetworkParam();
+  const { chains } = getRuntimeConfig();
 
   const [search, setSearch] = useState('');
+  const [chainFilter, setChainFilter] = useState<ChainFilterValue>('all');
   const [sortMode, setSortMode] = useState<SortMode>('totalSupply');
   const [riskManagerFilter, setRiskManagerFilter] = useState<string[]>([]);
   const [marketFilter, setMarketFilter] = useState<string[]>([]);
@@ -160,110 +165,145 @@ export default function LendPage() {
   const [exposureFilter, setExposureFilter] = useState<string[]>([]);
   const [showExposureFilter, setShowExposureFilter] = useState(false);
 
-  // Filters name risk managers/assets of one chain — they cannot carry over to another.
-  useEffect(() => {
-    setRiskManagerFilter([]);
-    setMarketFilter([]);
-    setAssetFilter([]);
-    setExposureFilter([]);
-  }, [chainId]);
-
-  const productsQuery = useQuery({ queryKey: ['euler', 'products', chainId], queryFn: () => fetchProducts(chainId) });
-  const entitiesQuery = useQuery({ queryKey: ['euler', 'entities', chainId], queryFn: () => fetchEntities(chainId) });
-  const intrinsicQuery = useQuery({
-    queryKey: ['euler', 'apys-intrinsic', chainId],
-    queryFn: () => fetchIntrinsicApys(chainId)
+  const productsQueries = useQueries({
+    queries: chains.map(({ chainId }) => ({
+      queryKey: ['euler', 'products', chainId],
+      queryFn: () => fetchProducts(chainId)
+    }))
   });
-  const rewardsQuery = useQuery({ queryKey: ['euler', 'apys-rewards', chainId], queryFn: () => fetchRewardApys(chainId) });
-
-  const vaultAddresses = useMemo(() => {
-    const addresses = new Set<string>();
-    for (const product of Object.values(productsQuery.data ?? {})) {
-      if (product.notExplorable) continue;
-      for (const address of product.vaults ?? []) {
-        if (!productVaultOverride(product, address)?.notExplorableLend) addresses.add(address);
-      }
-    }
-    return Array.from(addresses);
-  }, [productsQuery.data]);
-
-  const vaultsQuery = useQuery({
-    queryKey: ['euler', 'lend-vaults-batch', chainId, vaultAddresses],
-    enabled: vaultAddresses.length > 0,
-    queryFn: () => fetchVaultsBatch(chainId, vaultAddresses)
+  const entitiesQueries = useQueries({
+    queries: chains.map(({ chainId }) => ({
+      queryKey: ['euler', 'entities', chainId],
+      queryFn: () => fetchEntities(chainId)
+    }))
+  });
+  const intrinsicQueries = useQueries({
+    queries: chains.map(({ chainId }) => ({
+      queryKey: ['euler', 'apys-intrinsic', chainId],
+      queryFn: () => fetchIntrinsicApys(chainId)
+    }))
+  });
+  const rewardsQueries = useQueries({
+    queries: chains.map(({ chainId }) => ({
+      queryKey: ['euler', 'apys-rewards', chainId],
+      queryFn: () => fetchRewardApys(chainId)
+    }))
   });
 
-  const unresolvedExposureVaults = useMemo(() => {
-    const addresses = new Set<string>();
-    for (const vault of vaultsQuery.data?.data ?? []) {
-      for (const collateral of vault.collaterals ?? []) {
-        if (!collateral.asset || !collateral.assetSymbol) addresses.add(collateral.collateral);
-      }
-    }
-    return Array.from(addresses);
-  }, [vaultsQuery.data]);
+  const vaultAddressesByChain = useMemo(
+    () =>
+      productsQueries.map((productsQuery) => {
+        const addresses = new Set<string>();
+        for (const product of Object.values(productsQuery.data ?? {})) {
+          if (product.notExplorable) continue;
+          for (const address of product.vaults ?? []) {
+            if (!productVaultOverride(product, address)?.notExplorableLend) addresses.add(address);
+          }
+        }
+        return Array.from(addresses);
+      }),
+    [productsQueries]
+  );
 
-  const exposureAssetsQuery = useQuery({
-    queryKey: ['euler', 'lend-exposure-assets', chainId, unresolvedExposureVaults],
-    enabled: unresolvedExposureVaults.length > 0,
-    queryFn: () => resolveExposureVaults(chainId, unresolvedExposureVaults)
+  const vaultsQueries = useQueries({
+    queries: chains.map(({ chainId }, index) => {
+      const addresses = vaultAddressesByChain[index] ?? [];
+      return {
+        queryKey: ['euler', 'lend-vaults-batch', chainId, addresses],
+        enabled: addresses.length > 0,
+        queryFn: () => fetchVaultsBatch(chainId, addresses)
+      };
+    })
+  });
+
+  const unresolvedExposureVaultsByChain = useMemo(
+    () =>
+      vaultsQueries.map((vaultsQuery) => {
+        const addresses = new Set<string>();
+        for (const vault of vaultsQuery.data?.data ?? []) {
+          for (const collateral of vault.collaterals ?? []) {
+            if (!collateral.asset || !collateral.assetSymbol) addresses.add(collateral.collateral);
+          }
+        }
+        return Array.from(addresses);
+      }),
+    [vaultsQueries]
+  );
+
+  const exposureAssetsQueries = useQueries({
+    queries: chains.map(({ chainId }, index) => {
+      const addresses = unresolvedExposureVaultsByChain[index] ?? [];
+      return {
+        queryKey: ['euler', 'lend-exposure-assets', chainId, addresses],
+        enabled: addresses.length > 0,
+        queryFn: () => resolveExposureVaults(chainId, addresses)
+      };
+    })
   });
 
   const cards = useMemo<LendVaultCard[]>(() => {
-    const memberships = new Map<string, ProductMembership>();
-    for (const product of Object.values(productsQuery.data ?? {})) {
-      if (product.notExplorable) continue;
-      const riskManagerSlug = productEntities(product)[0];
-      for (const address of product.vaults ?? []) {
-        const override = productVaultOverride(product, address);
-        if (!override?.notExplorableLend) memberships.set(address.toLowerCase(), { product, override, riskManagerSlug });
-      }
-    }
-
-    const intrinsicByAsset = new Map((intrinsicQuery.data?.data ?? []).map((apy) => [apy.address.toLowerCase(), apy.apy] as const));
-    const rewardsByVault = new Map((rewardsQuery.data?.data ?? []).map((rewards) => [rewards.vault.toLowerCase(), rewards] as const));
-    const vaultsByAddress = new Map((vaultsQuery.data?.data ?? []).map((vault) => [vault.address.toLowerCase(), vault] as const));
-    const entities = entitiesQuery.data ?? {};
-
-    return (vaultsQuery.data?.data ?? []).flatMap((vault: V3VaultDetail) => {
-      const membership = memberships.get(vault.address.toLowerCase());
-      if (!membership || !vault.collaterals?.length) return [];
-
-      const { product, override, riskManagerSlug } = membership;
-      const riskManager = riskManagerSlug ? entities[riskManagerSlug] : undefined;
-      const rewardApy = activeRewardApy(rewardsByVault.get(vault.address.toLowerCase()));
-      const exposures = new Map<string, LendExposure>();
-      for (const collateral of vault.collaterals) {
-        const collateralVault = vaultsByAddress.get(collateral.collateral.toLowerCase());
-        const resolvedExposure = exposureAssetsQuery.data?.[collateral.collateral.toLowerCase()];
-        const address = collateral.asset || collateralVault?.asset.address || resolvedExposure?.address;
-        const symbol = collateral.assetSymbol || collateralVault?.asset.symbol || resolvedExposure?.symbol;
-        if (!address || !symbol) continue;
-        exposures.set(address.toLowerCase(), { address, symbol });
-      }
-      const tags = [...(product.tags ?? []), ...(override?.tags ?? [])].map((tag) => tag.toLowerCase());
-
-      return [
-        {
-          address: vault.address,
-          name: override?.name ?? product.name ?? vault.name,
-          marketName: product.name ?? vault.name,
-          assetAddress: vault.asset.address,
-          assetSymbol: vault.asset.symbol,
-          riskManagerName: riskManager?.name ?? riskManagerSlug ?? '-',
-          riskManagerLogo: entityLogoUrl(riskManager?.logo),
-          totalSupplyUsd: vault.totalSupplyUsd || 0,
-          availableLiquidityUsd: Math.max((vault.totalSupplyUsd || 0) - (vault.totalBorrowsUsd || 0), 0),
-          utilization: vault.utilization || 0,
-          supplyApy: (vault.supplyApy || 0) + (intrinsicByAsset.get(vault.asset.address.toLowerCase()) ?? 0) + rewardApy,
-          rewardApy,
-          exposures: Array.from(exposures.values()),
-          recentlyAdded: tags.includes('recently added'),
-          privateMarket: tags.includes('private') || tags.includes('keyring') || tags.includes('access control')
+    return chains.flatMap(({ chainId }, index) => {
+      const products = productsQueries[index]?.data ?? {};
+      const entities = entitiesQueries[index]?.data ?? {};
+      const intrinsicData = intrinsicQueries[index]?.data;
+      const rewardsData = rewardsQueries[index]?.data;
+      const vaultsData = vaultsQueries[index]?.data;
+      const exposureAssets = exposureAssetsQueries[index]?.data;
+      const memberships = new Map<string, ProductMembership>();
+      for (const product of Object.values(products)) {
+        if (product.notExplorable) continue;
+        const riskManagerSlug = productEntities(product)[0];
+        for (const address of product.vaults ?? []) {
+          const override = productVaultOverride(product, address);
+          if (!override?.notExplorableLend) memberships.set(address.toLowerCase(), { product, override, riskManagerSlug });
         }
-      ];
+      }
+
+      const intrinsicByAsset = new Map((intrinsicData?.data ?? []).map((apy) => [apy.address.toLowerCase(), apy.apy] as const));
+      const rewardsByVault = new Map((rewardsData?.data ?? []).map((rewards) => [rewards.vault.toLowerCase(), rewards] as const));
+      const vaultsByAddress = new Map((vaultsData?.data ?? []).map((vault) => [vault.address.toLowerCase(), vault] as const));
+
+      return (vaultsData?.data ?? []).flatMap((vault: V3VaultDetail) => {
+        const membership = memberships.get(vault.address.toLowerCase());
+        if (!membership || !vault.collaterals?.length) return [];
+
+        const { product, override, riskManagerSlug } = membership;
+        const riskManager = riskManagerSlug ? entities[riskManagerSlug] : undefined;
+        const rewardApy = activeRewardApy(rewardsByVault.get(vault.address.toLowerCase()));
+        const exposures = new Map<string, LendExposure>();
+        for (const collateral of vault.collaterals) {
+          const collateralVault = vaultsByAddress.get(collateral.collateral.toLowerCase());
+          const resolvedExposure = exposureAssets?.[collateral.collateral.toLowerCase()];
+          const address = collateral.asset || collateralVault?.asset.address || resolvedExposure?.address;
+          const symbol = collateral.assetSymbol || collateralVault?.asset.symbol || resolvedExposure?.symbol;
+          if (!address || !symbol) continue;
+          exposures.set(address.toLowerCase(), { address, symbol });
+        }
+        const tags = [...(product.tags ?? []), ...(override?.tags ?? [])].map((tag) => tag.toLowerCase());
+
+        return [
+          {
+            chainId,
+            address: vault.address,
+            name: override?.name ?? product.name ?? vault.name,
+            marketName: product.name ?? vault.name,
+            assetAddress: vault.asset.address,
+            assetSymbol: vault.asset.symbol,
+            riskManagerName: riskManager?.name ?? riskManagerSlug ?? '-',
+            riskManagerLogo: entityLogoUrl(riskManager?.logo),
+            totalSupplyUsd: vault.totalSupplyUsd || 0,
+            availableLiquidityUsd: Math.max((vault.totalSupplyUsd || 0) - (vault.totalBorrowsUsd || 0), 0),
+            utilization: vault.utilization || 0,
+            supplyApy: (vault.supplyApy || 0) + (intrinsicByAsset.get(vault.asset.address.toLowerCase()) ?? 0) + rewardApy,
+            rewardApy,
+            exposures: Array.from(exposures.values()),
+            recentlyAdded: tags.includes('recently added'),
+            privateMarket: tags.includes('private') || tags.includes('keyring') || tags.includes('access control')
+          }
+        ];
+      });
     });
-  }, [entitiesQuery.data, exposureAssetsQuery.data, intrinsicQuery.data, productsQuery.data, rewardsQuery.data, vaultsQuery.data]);
+  }, [chains, entitiesQueries, exposureAssetsQueries, intrinsicQueries, productsQueries, rewardsQueries, vaultsQueries]);
 
   const riskManagerOptions = useMemo(
     () => Array.from(new Set(cards.map((card) => card.riskManagerName).filter((name) => name !== '-'))).sort(),
@@ -275,16 +315,25 @@ export default function LendPage() {
     () => Array.from(new Set(cards.flatMap((card) => card.exposures.map((exposure) => exposure.symbol)))).sort(),
     [cards]
   );
+  const chainLabels = useMemo(() => new Map(chains.map((chain) => [chain.chainId, chain.label])), [chains]);
 
   const visibleCards = useMemo(() => {
     const query = search.trim().toLowerCase();
     const filtered = cards.filter((card) => {
+      if (chainFilter !== 'all' && card.chainId !== chainFilter) return false;
       if (riskManagerFilter.length > 0 && !riskManagerFilter.includes(card.riskManagerName)) return false;
       if (marketFilter.length > 0 && !marketFilter.includes(card.marketName)) return false;
       if (assetFilter.length > 0 && !assetFilter.includes(card.assetSymbol)) return false;
       if (exposureFilter.length > 0 && !card.exposures.some((exposure) => exposureFilter.includes(exposure.symbol))) return false;
       if (!query) return true;
-      return [card.name, card.marketName, card.assetSymbol, card.riskManagerName, ...card.exposures.map((exposure) => exposure.symbol)]
+      return [
+        card.name,
+        card.marketName,
+        card.assetSymbol,
+        card.riskManagerName,
+        chainLabels.get(card.chainId),
+        ...card.exposures.map((exposure) => exposure.symbol)
+      ]
         .join(' ')
         .toLowerCase()
         .includes(query);
@@ -312,10 +361,24 @@ export default function LendPage() {
           return b.totalSupplyUsd - a.totalSupplyUsd;
       }
     });
-  }, [assetFilter, cards, exposureFilter, marketFilter, riskManagerFilter, search, sortMode]);
+  }, [assetFilter, cards, chainFilter, chainLabels, exposureFilter, marketFilter, riskManagerFilter, search, sortMode]);
 
-  const loading = productsQuery.isLoading || vaultsQuery.isLoading;
-  const error = productsQuery.error || vaultsQuery.error;
+  const failedChains = chains.filter((_, index) =>
+    [
+      productsQueries[index],
+      entitiesQueries[index],
+      intrinsicQueries[index],
+      rewardsQueries[index],
+      vaultsQueries[index],
+      exposureAssetsQueries[index]
+    ].some((query) => query?.isError)
+  );
+  const coreLoading = chains.some(
+    (_, index) => productsQueries[index]?.isLoading || ((vaultAddressesByChain[index]?.length ?? 0) > 0 && vaultsQueries[index]?.isLoading)
+  );
+  const loading = cards.length === 0 && coreLoading;
+  const fullFailure = cards.length === 0 && !coreLoading && failedChains.length > 0;
+  const failedChainLabels = failedChains.map((chain) => chain.label).join(', ');
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, margin: '0 auto' }}>
@@ -349,6 +412,9 @@ export default function LendPage() {
               }
             }}
           />
+        </Grid>
+        <Grid size={{ xs: 6, md: 1.4 }}>
+          <ChainFilter value={chainFilter} onChange={setChainFilter} />
         </Grid>
         <Grid size={{ xs: 6, md: 1.8 }}>
           <Select
@@ -482,38 +548,44 @@ export default function LendPage() {
         </Box>
       )}
 
+      {cards.length > 0 && failedChains.length > 0 && (
+        <Alert severity="warning" variant="outlined" sx={{ marginBottom: 1.25 }}>
+          Some networks failed to load ({failedChainLabels}). Showing available lending vaults.
+        </Alert>
+      )}
+
       {loading && (
         <Box sx={{ display: 'flex', justifyContent: 'center', padding: 7 }}>
           <CircularProgress />
         </Box>
       )}
 
-      {!loading && !!error && (
+      {fullFailure && (
         <Paper sx={{ padding: 3, border: `1px solid ${theme.palette.divider}` }}>
-          <Typography color="error">Failed to load Euler Lend data: {(error as Error).message}</Typography>
+          <Typography color="error">Failed to load Euler Lend data for {failedChainLabels}.</Typography>
           <Typography variant="body2" sx={{ color: theme.palette.grey[500], marginTop: 1 }}>
             Product labels and EVK metrics come directly from the configured public Euler endpoints.
           </Typography>
         </Paper>
       )}
 
-      {!loading && !error && visibleCards.length === 0 && (
+      {!loading && !fullFailure && visibleCards.length === 0 && (
         <Paper sx={{ padding: 3, border: `1px solid ${theme.palette.divider}` }}>
           <Typography>No lending vaults match the current filters.</Typography>
         </Paper>
       )}
 
-      {!loading && !error && (
+      {!loading && !fullFailure && (
         <Stack spacing={1.25}>
           {visibleCards.map((vault) => (
             <Paper
               component="article"
-              key={vault.address}
-              onClick={() => navigate(`/lend/${vault.address}?network=${chainId}`)}
+              key={`${vault.chainId}:${vault.address.toLowerCase()}`}
+              onClick={() => navigate(`/lend/${vault.address}?network=${vault.chainId}`)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  navigate(`/lend/${vault.address}?network=${chainId}`);
+                  navigate(`/lend/${vault.address}?network=${vault.chainId}`);
                 }
               }}
               role="link"
@@ -539,7 +611,7 @@ export default function LendPage() {
               >
                 <TokenIcon
                   symbol={vault.assetSymbol}
-                  logoUrl={tokenImageUrl(chainId, vault.assetAddress)}
+                  logoUrl={tokenImageUrl(vault.chainId, vault.assetAddress)}
                   avatarProps={{ sx: { width: 40, height: 40, fontSize: 12 } }}
                 />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -547,6 +619,7 @@ export default function LendPage() {
                     <Typography variant="body2" sx={{ color: theme.palette.grey[500], overflowWrap: 'anywhere' }}>
                       {vault.name}
                     </Typography>
+                    <ChainBadge chainId={vault.chainId} />
                     {vault.recentlyAdded && (
                       <Chip
                         icon={<StarOutlineIcon />}
@@ -629,8 +702,8 @@ export default function LendPage() {
                       }}
                     >
                       {vault.exposures.map((exposure) => (
-                        <Tooltip key={exposure.address} title={exposure.symbol} arrow>
-                          <Avatar src={tokenImageUrl(chainId, exposure.address)} alt={exposure.symbol}>
+                        <Tooltip key={`${vault.chainId}:${exposure.address.toLowerCase()}`} title={exposure.symbol} arrow>
+                          <Avatar src={tokenImageUrl(vault.chainId, exposure.address)} alt={exposure.symbol}>
                             {exposure.symbol.slice(0, 2)}
                           </Avatar>
                         </Tooltip>

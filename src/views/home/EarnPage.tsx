@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import { formatUnits } from 'viem';
 import {
+  Alert,
   Autocomplete,
   Avatar,
   AvatarGroup,
@@ -36,7 +37,9 @@ import {
   fetchVaultsBatch,
   tokenImageUrl
 } from '@/api/euler';
-import { useNetworkParam } from 'hooks/useNetworkParam';
+import { getRuntimeConfig } from '@/appconfig/runtime';
+import ChainFilter, { ChainFilterValue } from 'components/ChainFilter';
+import { ChainBadge } from 'components/ChainIcon';
 import { TokenIcon } from 'components/TokenIcon';
 import { EulerEarnVault, EulerEarnVaultLabel, EulerEntities, V3VaultDetail } from 'types/euler';
 import { formatShortUSDS } from 'utils/formatters';
@@ -134,92 +137,115 @@ function getExposures(vault: EulerEarnVault, strategyVaults: Map<string, V3Vault
 export default function EarnPage() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { chainId } = useNetworkParam();
+  const { chains } = getRuntimeConfig();
 
   const [search, setSearch] = useState('');
+  const [chainFilter, setChainFilter] = useState<ChainFilterValue>('all');
   const [sortMode, setSortMode] = useState<SortMode>('totalSupply');
   const [allocatorFilter, setAllocatorFilter] = useState<string[]>([]);
   const [assetFilter, setAssetFilter] = useState<string[]>([]);
   const [exposureFilter, setExposureFilter] = useState<string[]>([]);
   const [showExposureFilter, setShowExposureFilter] = useState(false);
 
-  // Filters name allocators/assets of one chain — they cannot carry over to another.
-  useEffect(() => {
-    setAllocatorFilter([]);
-    setAssetFilter([]);
-    setExposureFilter([]);
-  }, [chainId]);
-
-  const labelsQuery = useQuery({
-    queryKey: ['euler', 'earn-labels', chainId],
-    queryFn: () => fetchEarnVaultLabels(chainId)
+  const labelsQueries = useQueries({
+    queries: chains.map((chain) => ({
+      queryKey: ['euler', 'earn-labels', chain.chainId],
+      queryFn: () => fetchEarnVaultLabels(chain.chainId)
+    }))
   });
-  const entitiesQuery = useQuery({
-    queryKey: ['euler', 'entities', chainId],
-    queryFn: () => fetchEntities(chainId)
+  const entitiesQueries = useQueries({
+    queries: chains.map((chain) => ({
+      queryKey: ['euler', 'entities', chain.chainId],
+      queryFn: () => fetchEntities(chain.chainId)
+    }))
   });
-  const intrinsicQuery = useQuery({
-    queryKey: ['euler', 'apys-intrinsic', chainId],
-    queryFn: () => fetchIntrinsicApys(chainId)
-  });
-
-  const activeLabels = useMemo(
-    () => (labelsQuery.data ?? []).filter((label) => !label.deprecated && !label.notExplorable),
-    [labelsQuery.data]
-  );
-  const earnAddresses = useMemo(() => activeLabels.map((label) => label.address), [activeLabels]);
-
-  const earnVaultsQuery = useQuery({
-    queryKey: ['euler', 'earn-vaults-batch', chainId, earnAddresses],
-    enabled: earnAddresses.length > 0,
-    queryFn: () => fetchEarnVaultsBatch(chainId, earnAddresses)
+  const intrinsicQueries = useQueries({
+    queries: chains.map((chain) => ({
+      queryKey: ['euler', 'apys-intrinsic', chain.chainId],
+      queryFn: () => fetchIntrinsicApys(chain.chainId)
+    }))
   });
 
-  const strategyAddresses = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (earnVaultsQuery.data?.data ?? [])
-            .flatMap((vault) => vault.strategies)
-            .filter((strategy) => strategy.vaultType === 'evk')
-            .map((strategy) => strategy.address)
+  const activeLabelsByChain = useMemo(() => {
+    return new Map(
+      chains.map((chain, index) => [
+        chain.chainId,
+        (labelsQueries[index]?.data ?? []).filter((label) => !label.deprecated && !label.notExplorable)
+      ])
+    );
+  }, [chains, labelsQueries]);
+  const earnAddressesByChain = useMemo(() => {
+    return new Map(chains.map((chain) => [chain.chainId, (activeLabelsByChain.get(chain.chainId) ?? []).map((label) => label.address)]));
+  }, [activeLabelsByChain, chains]);
+
+  const earnVaultsQueries = useQueries({
+    queries: chains.map((chain) => {
+      const addresses = earnAddressesByChain.get(chain.chainId) ?? [];
+      return {
+        queryKey: ['euler', 'earn-vaults-batch', chain.chainId, addresses],
+        enabled: addresses.length > 0,
+        queryFn: () => fetchEarnVaultsBatch(chain.chainId, addresses)
+      };
+    })
+  });
+
+  const strategyAddressesByChain = useMemo(() => {
+    return new Map(
+      chains.map((chain, index) => [
+        chain.chainId,
+        Array.from(
+          new Set(
+            (earnVaultsQueries[index]?.data?.data ?? [])
+              .flatMap((vault) => vault.strategies)
+              .filter((strategy) => strategy.vaultType === 'evk')
+              .map((strategy) => strategy.address)
+          )
         )
-      ),
-    [earnVaultsQuery.data]
-  );
+      ])
+    );
+  }, [chains, earnVaultsQueries]);
 
-  const strategyVaultsQuery = useQuery({
-    queryKey: ['euler', 'earn-strategy-vaults', chainId, strategyAddresses],
-    enabled: strategyAddresses.length > 0,
-    queryFn: () => fetchVaultsBatch(chainId, strategyAddresses)
+  const strategyVaultsQueries = useQueries({
+    queries: chains.map((chain) => {
+      const addresses = strategyAddressesByChain.get(chain.chainId) ?? [];
+      return {
+        queryKey: ['euler', 'earn-strategy-vaults', chain.chainId, addresses],
+        enabled: addresses.length > 0,
+        queryFn: () => fetchVaultsBatch(chain.chainId, addresses)
+      };
+    })
   });
 
   const cards = useMemo<EarnVaultCard[]>(() => {
-    const labelMap = new Map<string, EulerEarnVaultLabel>(activeLabels.map((label) => [label.address.toLowerCase(), label]));
-    const strategyVaultMap = new Map<string, V3VaultDetail>();
-    for (const vault of strategyVaultsQuery.data?.data ?? []) {
-      strategyVaultMap.set(vault.address.toLowerCase(), vault);
-    }
-    const intrinsicByAsset = new Map<string, number>();
-    for (const apy of intrinsicQuery.data?.data ?? []) {
-      intrinsicByAsset.set(apy.address.toLowerCase(), apy.apy);
-    }
+    return chains.flatMap((chain, index) => {
+      const labelMap = new Map<string, EulerEarnVaultLabel>(
+        (activeLabelsByChain.get(chain.chainId) ?? []).map((label) => [label.address.toLowerCase(), label])
+      );
+      const strategyVaultMap = new Map<string, V3VaultDetail>();
+      for (const vault of strategyVaultsQueries[index]?.data?.data ?? []) {
+        strategyVaultMap.set(vault.address.toLowerCase(), vault);
+      }
+      const intrinsicByAsset = new Map<string, number>();
+      for (const apy of intrinsicQueries[index]?.data?.data ?? []) {
+        intrinsicByAsset.set(apy.address.toLowerCase(), apy.apy);
+      }
 
-    return (earnVaultsQuery.data?.data ?? []).map((vault) => {
-      const label = labelMap.get(vault.address.toLowerCase());
-      const allocator = findAllocator(vault, entitiesQuery.data ?? {});
-      return {
-        ...vault,
-        supplyApy: vault.supplyApy == null ? null : vault.supplyApy + (intrinsicByAsset.get(vault.asset.address.toLowerCase()) ?? 0),
-        description: label?.description ?? '',
-        tags: label?.tags ?? [],
-        allocatorName: allocator.name,
-        allocatorLogo: allocator.logo,
-        availableLiquidityUsd: calculateAvailableLiquidity(vault),
-        exposures: getExposures(vault, strategyVaultMap)
-      };
+      return (earnVaultsQueries[index]?.data?.data ?? []).map((vault) => {
+        const label = labelMap.get(vault.address.toLowerCase());
+        const allocator = findAllocator(vault, entitiesQueries[index]?.data ?? {});
+        return {
+          ...vault,
+          supplyApy: vault.supplyApy == null ? null : vault.supplyApy + (intrinsicByAsset.get(vault.asset.address.toLowerCase()) ?? 0),
+          description: label?.description ?? '',
+          tags: label?.tags ?? [],
+          allocatorName: allocator.name,
+          allocatorLogo: allocator.logo,
+          availableLiquidityUsd: calculateAvailableLiquidity(vault),
+          exposures: getExposures(vault, strategyVaultMap)
+        };
+      });
     });
-  }, [activeLabels, earnVaultsQuery.data, entitiesQuery.data, intrinsicQuery.data, strategyVaultsQuery.data]);
+  }, [activeLabelsByChain, chains, earnVaultsQueries, entitiesQueries, intrinsicQueries, strategyVaultsQueries]);
 
   const allocatorOptions = useMemo(
     () => Array.from(new Set(cards.map((vault) => vault.allocatorName).filter((name) => name !== '-'))).sort(),
@@ -234,12 +260,21 @@ export default function EarnPage() {
   const visibleCards = useMemo(() => {
     const query = search.trim().toLowerCase();
     const filtered = cards.filter((vault) => {
+      if (chainFilter !== 'all' && vault.chainId !== chainFilter) return false;
       if (allocatorFilter.length > 0 && !allocatorFilter.includes(vault.allocatorName)) return false;
       if (assetFilter.length > 0 && !assetFilter.includes(vault.asset.symbol)) return false;
       if (exposureFilter.length > 0 && !vault.exposures.some((asset) => exposureFilter.includes(asset.symbol))) return false;
       if (!query) return true;
 
-      return [vault.name, vault.asset.symbol, vault.allocatorName, vault.description, ...vault.exposures.map((asset) => asset.symbol)]
+      const chainName = chains.find((chain) => chain.chainId === vault.chainId)?.label ?? '';
+      return [
+        vault.name,
+        vault.asset.symbol,
+        vault.allocatorName,
+        vault.description,
+        chainName,
+        ...vault.exposures.map((asset) => asset.symbol)
+      ]
         .join(' ')
         .toLowerCase()
         .includes(query);
@@ -262,10 +297,30 @@ export default function EarnPage() {
           return b.totalSupplyUsd - a.totalSupplyUsd;
       }
     });
-  }, [cards, search, allocatorFilter, assetFilter, exposureFilter, sortMode]);
+  }, [cards, chains, search, chainFilter, allocatorFilter, assetFilter, exposureFilter, sortMode]);
 
-  const loading = labelsQuery.isLoading || earnVaultsQuery.isLoading || strategyVaultsQuery.isLoading || intrinsicQuery.isLoading;
-  const error = labelsQuery.error || earnVaultsQuery.error;
+  const loading =
+    labelsQueries.some((query) => query.isFetching) ||
+    entitiesQueries.some((query) => query.isFetching) ||
+    intrinsicQueries.some((query) => query.isFetching) ||
+    earnVaultsQueries.some((query, index) => (earnAddressesByChain.get(chains[index].chainId)?.length ?? 0) > 0 && query.isFetching) ||
+    strategyVaultsQueries.some(
+      (query, index) => (strategyAddressesByChain.get(chains[index].chainId)?.length ?? 0) > 0 && query.isFetching
+    );
+  const failedChains = chains.filter(
+    (chain, index) =>
+      labelsQueries[index]?.error ||
+      entitiesQueries[index]?.error ||
+      intrinsicQueries[index]?.error ||
+      earnVaultsQueries[index]?.error ||
+      strategyVaultsQueries[index]?.error
+  );
+  const error =
+    labelsQueries.find((query) => query.error)?.error ||
+    entitiesQueries.find((query) => query.error)?.error ||
+    intrinsicQueries.find((query) => query.error)?.error ||
+    earnVaultsQueries.find((query) => query.error)?.error ||
+    strategyVaultsQueries.find((query) => query.error)?.error;
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, margin: '0 auto' }}>
@@ -299,6 +354,9 @@ export default function EarnPage() {
               }
             }}
           />
+        </Grid>
+        <Grid size={{ xs: 6, md: 1.4 }}>
+          <ChainFilter value={chainFilter} onChange={setChainFilter} />
         </Grid>
         <Grid size={{ xs: 6, md: 2 }}>
           <Select
@@ -370,13 +428,13 @@ export default function EarnPage() {
         </Box>
       )}
 
-      {loading && (
+      {loading && cards.length === 0 && (
         <Box sx={{ display: 'flex', justifyContent: 'center', padding: 7 }}>
           <CircularProgress />
         </Box>
       )}
 
-      {!loading && !!error && (
+      {!!error && cards.length === 0 && !loading && (
         <Paper sx={{ padding: 3, border: `1px solid ${theme.palette.divider}` }}>
           <Typography color="error">Failed to load Euler Earn data: {(error as Error).message}</Typography>
           <Typography variant="body2" sx={{ color: theme.palette.grey[500], marginTop: 1 }}>
@@ -385,26 +443,32 @@ export default function EarnPage() {
         </Paper>
       )}
 
-      {!loading && !error && visibleCards.length === 0 && (
+      {failedChains.length > 0 && cards.length > 0 && (
+        <Alert severity="warning" variant="outlined" sx={{ marginBottom: 1.25 }}>
+          Some networks could not be fully loaded ({failedChains.map((chain) => chain.label).join(', ')}). Showing available Earn vaults.
+        </Alert>
+      )}
+
+      {!loading && visibleCards.length === 0 && (!error || cards.length > 0) && (
         <Paper sx={{ padding: 3, border: `1px solid ${theme.palette.divider}` }}>
           <Typography>No Earn vaults match the current filters.</Typography>
         </Paper>
       )}
 
-      {!loading && !error && (
+      {visibleCards.length > 0 && (
         <Stack spacing={1.25}>
           {visibleCards.map((vault) => (
             <Paper
               component="article"
-              key={vault.address}
+              key={`${vault.chainId}:${vault.address.toLowerCase()}`}
               role="link"
               tabIndex={0}
               aria-label={`Open ${vault.name}`}
-              onClick={() => navigate(`/earn/vault/${vault.address}?network=${chainId}`)}
+              onClick={() => navigate(`/earn/vault/${vault.address}?network=${vault.chainId}`)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  navigate(`/earn/vault/${vault.address}?network=${chainId}`);
+                  navigate(`/earn/vault/${vault.address}?network=${vault.chainId}`);
                 }
               }}
               sx={{
@@ -432,7 +496,7 @@ export default function EarnPage() {
               >
                 <TokenIcon
                   symbol={vault.asset.symbol}
-                  logoUrl={tokenImageUrl(chainId, vault.asset.address)}
+                  logoUrl={tokenImageUrl(vault.chainId, vault.asset.address)}
                   avatarProps={{ sx: { width: 40, height: 40, fontSize: 12 } }}
                 />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -440,9 +504,10 @@ export default function EarnPage() {
                     <Typography variant="body2" sx={{ color: theme.palette.grey[500] }} noWrap>
                       {vault.name}
                     </Typography>
+                    <ChainBadge chainId={vault.chainId} />
                     {vault.tags.map((tag) => (
                       <Chip
-                        key={tag}
+                        key={`${vault.chainId}:${vault.address}:${tag}`}
                         label={`${tag.slice(0, 1).toUpperCase()}${tag.slice(1)}`}
                         size="small"
                         color="secondary"
@@ -526,8 +591,8 @@ export default function EarnPage() {
                         }}
                       >
                         {vault.exposures.map((asset) => (
-                          <Tooltip key={asset.address} title={asset.symbol} arrow>
-                            <Avatar src={tokenImageUrl(chainId, asset.address)} alt={asset.symbol}>
+                          <Tooltip key={`${vault.chainId}:${asset.address}`} title={asset.symbol} arrow>
+                            <Avatar src={tokenImageUrl(vault.chainId, asset.address)} alt={asset.symbol}>
                               {asset.symbol.slice(0, 2).toUpperCase()}
                             </Avatar>
                           </Tooltip>

@@ -6,7 +6,6 @@ import Box from '@mui/material/Box';
 // project imports
 import LogoSection from '../LogoSection';
 import ConnectButtonCustom from 'components/ConnectButtonCustom';
-import NetworkSelector from 'components/NetworkSelector';
 import HeaderMenu from './HeaderMenu';
 
 // ==============================|| MAIN NAVBAR / HEADER ||============================== //
@@ -28,12 +27,9 @@ export default function Header() {
       <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'flex-start' }}>
         <HeaderMenu />
       </Box>
-      {/* network picker & connect wallet */}
+      {/* connect wallet */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <NetworkSelector minWidth={downMD ? 110 : 140} />
-        {/* chainStatus="none" hides RainbowKit's chain button — including its "Wrong network"
-            state — so NetworkSelector is the only network control and owns that warning. */}
-        <ConnectButtonCustom chainStatus="none" showBalance={false} />
+        <ConnectButtonCustom chainStatus="icon" showBalance={false} />
       </Box>
     </>
   );
