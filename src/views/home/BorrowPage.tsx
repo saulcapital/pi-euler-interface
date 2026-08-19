@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import {
+  Alert,
   Autocomplete,
   Avatar,
   Box,
@@ -31,7 +32,9 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import { Address, Hex, decodeFunctionResult, encodeFunctionData } from 'viem';
 
 import { entityLogoUrl, fetchEntities, fetchProducts, fetchVaultsBatch, rpcCall, tokenImageUrl } from '@/api/euler';
-import { useNetworkParam } from 'hooks/useNetworkParam';
+import { getRuntimeConfig } from '@/appconfig/runtime';
+import ChainFilter, { ChainFilterValue } from 'components/ChainFilter';
+import { ChainBadge } from 'components/ChainIcon';
 import { ERC20_ABI, ERC4626_ABI } from '@/contracts/erc4626';
 import { TokenIcon } from 'components/TokenIcon';
 import { EulerProduct, V3VaultDetail } from 'types/euler';
@@ -41,6 +44,7 @@ type SortMode = 'totalBorrowed' | 'borrowApy' | 'maxMultiplier' | 'maxLtv' | 'av
 
 interface BorrowPair {
   id: string;
+  chainId: number;
   collateralVault: string;
   collateralAssetAddress: string;
   collateralSymbol: string;
@@ -108,26 +112,30 @@ const ROWS_PER_PAGE = 25;
 export default function BorrowPage() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { chainId } = useNetworkParam();
+  const { chains } = getRuntimeConfig();
 
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('totalBorrowed');
+  const [chainFilter, setChainFilter] = useState<ChainFilterValue>('all');
   const [riskManagerFilter, setRiskManagerFilter] = useState<string[]>([]);
   const [collateralFilter, setCollateralFilter] = useState<string[]>([]);
   const [borrowFilter, setBorrowFilter] = useState<string[]>([]);
   const [page, setPage] = useState(1);
 
-  // Filters name risk managers/assets of one chain — they cannot carry over to another.
-  useEffect(() => {
-    setRiskManagerFilter([]);
-    setCollateralFilter([]);
-    setBorrowFilter([]);
-  }, [chainId]);
+  const productsQueries = useQueries({
+    queries: chains.map(({ chainId }) => ({
+      queryKey: ['euler', 'products', chainId],
+      queryFn: () => fetchProducts(chainId)
+    }))
+  });
+  const entitiesQueries = useQueries({
+    queries: chains.map(({ chainId }) => ({
+      queryKey: ['euler', 'entities', chainId],
+      queryFn: () => fetchEntities(chainId)
+    }))
+  });
 
-  const productsQuery = useQuery({ queryKey: ['euler', 'products', chainId], queryFn: () => fetchProducts(chainId) });
-  const entitiesQuery = useQuery({ queryKey: ['euler', 'entities', chainId], queryFn: () => fetchEntities(chainId) });
-
-  const vaultAddresses = useMemo(() => {
+  const vaultAddressesByChain = productsQueries.map((productsQuery) => {
     const addresses = new Set<string>();
     for (const product of Object.values(productsQuery.data ?? {})) {
       if (product.notExplorable) continue;
@@ -136,15 +144,20 @@ export default function BorrowPage() {
       }
     }
     return Array.from(addresses);
-  }, [productsQuery.data]);
-
-  const vaultsQuery = useQuery({
-    queryKey: ['euler', 'borrow-vaults-batch', chainId, vaultAddresses],
-    enabled: vaultAddresses.length > 0,
-    queryFn: () => fetchVaultsBatch(chainId, vaultAddresses)
   });
 
-  const unresolvedCollateralVaults = useMemo(() => {
+  const vaultsQueries = useQueries({
+    queries: chains.map(({ chainId }, index) => {
+      const vaultAddresses = vaultAddressesByChain[index];
+      return {
+        queryKey: ['euler', 'borrow-vaults-batch', chainId, vaultAddresses],
+        enabled: vaultAddresses.length > 0,
+        queryFn: () => fetchVaultsBatch(chainId, vaultAddresses)
+      };
+    })
+  });
+
+  const unresolvedCollateralVaultsByChain = vaultsQueries.map((vaultsQuery) => {
     const addresses = new Set<string>();
     for (const vault of vaultsQuery.data?.data ?? []) {
       for (const collateral of vault.collaterals ?? []) {
@@ -152,17 +165,26 @@ export default function BorrowPage() {
       }
     }
     return Array.from(addresses);
-  }, [vaultsQuery.data]);
+  });
 
-  const collateralAssetsQuery = useQuery({
-    queryKey: ['euler', 'borrow-collateral-assets', chainId, unresolvedCollateralVaults],
-    enabled: unresolvedCollateralVaults.length > 0,
-    queryFn: () => resolveCollateralVaults(chainId, unresolvedCollateralVaults)
+  const collateralAssetsQueries = useQueries({
+    queries: chains.map(({ chainId }, index) => {
+      const unresolvedCollateralVaults = unresolvedCollateralVaultsByChain[index];
+      return {
+        queryKey: ['euler', 'borrow-collateral-assets', chainId, unresolvedCollateralVaults],
+        enabled: unresolvedCollateralVaults.length > 0,
+        queryFn: () => resolveCollateralVaults(chainId, unresolvedCollateralVaults)
+      };
+    })
   });
 
   // Each accepted (collateral, borrowable) combination is its own borrow market — mirrors the
   // pair-based rows of the official Euler borrow page and its /borrow/<collateral>/<liability> route.
-  const pairs = useMemo<BorrowPair[]>(() => {
+  const pairs = chains.flatMap(({ chainId }, index): BorrowPair[] => {
+    const productsQuery = productsQueries[index];
+    const entitiesQuery = entitiesQueries[index];
+    const vaultsQuery = vaultsQueries[index];
+    const collateralAssetsQuery = collateralAssetsQueries[index];
     const memberships = new Map<string, ProductMembership>();
     for (const product of Object.values(productsQuery.data ?? {})) {
       if (product.notExplorable) continue;
@@ -198,6 +220,7 @@ export default function BorrowPage() {
         return [
           {
             id: `${collateral.collateral.toLowerCase()}-${vault.address.toLowerCase()}`,
+            chainId,
             collateralVault: collateral.collateral,
             collateralAssetAddress,
             collateralSymbol,
@@ -219,7 +242,7 @@ export default function BorrowPage() {
         ];
       });
     });
-  }, [collateralAssetsQuery.data, entitiesQuery.data, productsQuery.data, vaultsQuery.data]);
+  });
 
   const riskManagerOptions = useMemo(
     () => Array.from(new Set(pairs.map((pair) => pair.riskManagerName).filter((name) => name !== '-'))).sort(),
@@ -230,12 +253,17 @@ export default function BorrowPage() {
 
   const visiblePairs = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const filtered = pairs.filter((pair) => {
+    const chainPairs = chainFilter === 'all' ? pairs : pairs.filter((pair) => pair.chainId === chainFilter);
+    const filtered = chainPairs.filter((pair) => {
       if (riskManagerFilter.length > 0 && !riskManagerFilter.includes(pair.riskManagerName)) return false;
       if (collateralFilter.length > 0 && !collateralFilter.includes(pair.collateralSymbol)) return false;
       if (borrowFilter.length > 0 && !borrowFilter.includes(pair.borrowSymbol)) return false;
       if (!query) return true;
-      return [pair.collateralSymbol, pair.borrowSymbol, pair.marketName, pair.riskManagerName].join(' ').toLowerCase().includes(query);
+      const chainName = chains.find((chain) => chain.chainId === pair.chainId)?.label;
+      return [pair.collateralSymbol, pair.borrowSymbol, pair.marketName, pair.riskManagerName, chainName]
+        .join(' ')
+        .toLowerCase()
+        .includes(query);
     });
 
     return filtered.sort((a, b) => {
@@ -255,18 +283,35 @@ export default function BorrowPage() {
           return b.totalBorrowedUsd - a.totalBorrowedUsd;
       }
     });
-  }, [borrowFilter, collateralFilter, pairs, riskManagerFilter, search, sortMode]);
+  }, [borrowFilter, chainFilter, chains, collateralFilter, pairs, riskManagerFilter, search, sortMode]);
 
   // Reset to the first page whenever the result set changes.
-  useEffect(() => setPage(1), [search, sortMode, riskManagerFilter, collateralFilter, borrowFilter, chainId]);
+  useEffect(() => setPage(1), [search, sortMode, chainFilter, riskManagerFilter, collateralFilter, borrowFilter]);
 
   const pageCount = Math.max(1, Math.ceil(visiblePairs.length / ROWS_PER_PAGE));
   const pagePairs = visiblePairs.slice((page - 1) * ROWS_PER_PAGE, page * ROWS_PER_PAGE);
 
-  const openPair = (pair: BorrowPair) => navigate(`/borrow/${pair.collateralVault}/${pair.borrowVault}?network=${chainId}`);
+  const openPair = (pair: BorrowPair) => navigate(`/borrow/${pair.collateralVault}/${pair.borrowVault}?network=${pair.chainId}`);
 
-  const loading = productsQuery.isLoading || vaultsQuery.isLoading;
-  const error = productsQuery.error || vaultsQuery.error;
+  const chainStates = chains.map((_, index) => {
+    const vaultAddresses = vaultAddressesByChain[index];
+    const unresolvedCollateralVaults = unresolvedCollateralVaultsByChain[index];
+    const queries = [
+      productsQueries[index],
+      entitiesQueries[index],
+      ...(vaultAddresses.length > 0 ? [vaultsQueries[index]] : []),
+      ...(unresolvedCollateralVaults.length > 0 ? [collateralAssetsQueries[index]] : [])
+    ];
+    return {
+      loading: queries.some((query) => query.isPending),
+      error: queries.find((query) => query.isError)?.error
+    };
+  });
+  const loading = chainStates.some((state) => state.loading);
+  const failedChainCount = chainStates.filter((state) => state.error).length;
+  const allChainsFailed = chains.length > 0 && failedChainCount === chains.length;
+  const error = chainStates.find((state) => state.error)?.error;
+  const showFullError = !loading && pairs.length === 0 && allChainsFailed;
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, margin: '0 auto' }}>
@@ -287,7 +332,7 @@ export default function BorrowPage() {
           <TextField
             fullWidth
             size="small"
-            placeholder="Search by collateral, asset, curator..."
+            placeholder="Search by collateral, asset, curator, network..."
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             slotProps={{
@@ -300,6 +345,9 @@ export default function BorrowPage() {
               }
             }}
           />
+        </Grid>
+        <Grid size={{ xs: 6, md: 1.4 }}>
+          <ChainFilter value={chainFilter} onChange={setChainFilter} />
         </Grid>
         <Grid size={{ xs: 6, md: 2 }}>
           <Select
@@ -406,13 +454,19 @@ export default function BorrowPage() {
         </Grid>
       </Grid>
 
-      {loading && (
+      {failedChainCount > 0 && !showFullError && (
+        <Alert severity="warning" sx={{ marginBottom: 2 }}>
+          Could not fully load {failedChainCount} of {chains.length} configured chains. Showing available market data.
+        </Alert>
+      )}
+
+      {loading && visiblePairs.length === 0 && (
         <Box sx={{ display: 'flex', justifyContent: 'center', padding: 7 }}>
           <CircularProgress />
         </Box>
       )}
 
-      {!loading && !!error && (
+      {showFullError && (
         <Paper sx={{ padding: 3, border: `1px solid ${theme.palette.divider}` }}>
           <Typography color="error">Failed to load Euler Borrow data: {(error as Error).message}</Typography>
           <Typography variant="body2" sx={{ color: theme.palette.grey[500], marginTop: 1 }}>
@@ -421,13 +475,13 @@ export default function BorrowPage() {
         </Paper>
       )}
 
-      {!loading && !error && visiblePairs.length === 0 && (
+      {!loading && !showFullError && visiblePairs.length === 0 && (
         <Paper sx={{ padding: 3, border: `1px solid ${theme.palette.divider}` }}>
           <Typography>No borrow markets match the current filters.</Typography>
         </Paper>
       )}
 
-      {!loading && !error && visiblePairs.length > 0 && (
+      {visiblePairs.length > 0 && (
         <>
           <Typography variant="body2" sx={{ color: theme.palette.grey[500], marginBottom: 1 }}>
             {visiblePairs.length} borrow markets
@@ -436,7 +490,7 @@ export default function BorrowPage() {
             {pagePairs.map((pair) => (
               <Paper
                 component="article"
-                key={pair.id}
+                key={`${pair.chainId}-${pair.id}`}
                 onClick={() => openPair(pair)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
@@ -462,13 +516,13 @@ export default function BorrowPage() {
                       <Box sx={{ display: 'flex', alignItems: 'center' }}>
                         <TokenIcon
                           symbol={pair.collateralSymbol}
-                          logoUrl={tokenImageUrl(chainId, pair.collateralAssetAddress)}
+                          logoUrl={tokenImageUrl(pair.chainId, pair.collateralAssetAddress)}
                           avatarProps={{ sx: { width: 30, height: 30, fontSize: 10 } }}
                         />
                         <ArrowForwardIcon sx={{ fontSize: 16, color: theme.palette.grey[500], mx: 0.25 }} />
                         <TokenIcon
                           symbol={pair.borrowSymbol}
-                          logoUrl={tokenImageUrl(chainId, pair.borrowAssetAddress)}
+                          logoUrl={tokenImageUrl(pair.chainId, pair.borrowAssetAddress)}
                           avatarProps={{ sx: { width: 30, height: 30, fontSize: 10 } }}
                         />
                       </Box>
@@ -477,6 +531,7 @@ export default function BorrowPage() {
                           <Typography variant="h4" noWrap>
                             {pair.collateralSymbol} → {pair.borrowSymbol}
                           </Typography>
+                          <ChainBadge chainId={pair.chainId} />
                           {pair.recentlyAdded && <StarOutlineIcon sx={{ fontSize: 15, color: theme.palette.secondary.main }} />}
                           {pair.privateMarket && <LockOutlinedIcon sx={{ fontSize: 15, color: theme.palette.grey[500] }} />}
                         </Box>

@@ -18,7 +18,6 @@ import Breadcrumbs from 'ui-component/extended/Breadcrumbs';
 
 import { MenuOrientation, ThemeMode } from 'config';
 import useConfig from 'hooks/useConfig';
-import { useNetworkParam } from 'hooks/useNetworkParam';
 import { handlerDrawerOpen, useGetMenuMaster } from 'api/menu';
 import Tabs from '@mui/material/Tabs';
 import Tab, { TabProps } from '@mui/material/Tab';
@@ -108,7 +107,6 @@ export default function MainLayout() {
 
   const navigate = useNavigate();
   const location = useLocation();
-  const { chainId } = useNetworkParam();
   const currentTabIndex = tabs.findIndex((tab) => location.pathname.includes(tab.path));
 
   useEffect(() => {
@@ -164,8 +162,7 @@ export default function MainLayout() {
                   key={tab.path}
                   label={tab.label}
                   onClick={() => {
-                    // The browsed network has to survive tab switches, as it does on app.euler.finance.
-                    const tabPath = `/${tab.path}?network=${chainId}`;
+                    const tabPath = `/${tab.path}`;
                     // click on the already-active tab
                     if (currentTabIndex === index) {
                       navigate(tabPath, { replace: true, state: { refresh: Date.now() } });

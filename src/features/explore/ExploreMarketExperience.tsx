@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Box,
@@ -34,6 +34,7 @@ import {
   buildCollateralMatrix,
   buildGraphDiagram,
   resolveDiscoverySelection,
+  type CollateralMatrix,
   type DiscoverySelection,
   type MatrixViewId
 } from './calculations';
@@ -126,8 +127,7 @@ export default function ExploreMarketExperience({
   const matrix = useMemo(() => buildCollateralMatrix(market), [market]);
   const rawVaultByAddress = useMemo(() => new Map(rawVaults.map((vault) => [normalizeAddress(vault.address), vault])), [rawVaults]);
 
-  useEffect(() => {
-    if (!onResolvedSummary) return;
+  const resolvedSummary = useMemo<ExploreResolvedSummary>(() => {
     let totalSupplyUsd = 0;
     let totalBorrowedUsd = 0;
     for (const vault of market.vaults) {
@@ -135,15 +135,25 @@ export default function ExploreMarketExperience({
       totalSupplyUsd += rawUsdValue(rawVault, 'supply');
       totalBorrowedUsd += rawUsdValue(rawVault, 'borrow');
     }
-    onResolvedSummary({
+    return {
       assetCount: diagram.assetCount,
       pairCount: diagram.pairCount,
       unknownVaults: Math.max(memberAddresses.length - market.vaults.length, 0),
       totalSupplyUsd,
       totalBorrowedUsd,
       availableLiquidityUsd: Math.max(totalSupplyUsd - totalBorrowedUsd, 0)
-    });
-  }, [diagram.assetCount, diagram.pairCount, market.vaults, memberAddresses.length, onResolvedSummary, rawVaultByAddress]);
+    };
+  }, [diagram.assetCount, diagram.pairCount, market.vaults, memberAddresses.length, rawVaultByAddress]);
+
+  // Latest-ref pattern: parents pass fresh inline callbacks each render, so the
+  // notification effect must key on the summary data, not the callback identity.
+  const onResolvedSummaryRef = useRef(onResolvedSummary);
+  useEffect(() => {
+    onResolvedSummaryRef.current = onResolvedSummary;
+  });
+  useEffect(() => {
+    onResolvedSummaryRef.current?.(resolvedSummary);
+  }, [resolvedSummary]);
 
   const setViewMode = (next: ViewMode | null) => {
     if (!next) return;
@@ -284,7 +294,9 @@ export default function ExploreMarketExperience({
         <Tooltip title="Copy market link">
           <IconButton
             size="small"
-            onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/explore/${marketId}?network=${chainId}`)}
+            onClick={() =>
+              navigator.clipboard?.writeText(`${window.location.origin}/explore?market=${encodeURIComponent(marketId)}&network=${chainId}`)
+            }
           >
             <LinkOutlinedIcon fontSize="small" />
           </IconButton>
@@ -332,6 +344,7 @@ export default function ExploreMarketExperience({
       <SelectionResults
         chainId={chainId}
         market={market}
+        matrix={matrix}
         mode={mode}
         matrixView={matrixView}
         graphAddress={selectedGraphNode}
@@ -351,6 +364,7 @@ export default function ExploreMarketExperience({
 function SelectionResults({
   chainId,
   market,
+  matrix,
   mode,
   matrixView,
   graphAddress,
@@ -359,6 +373,7 @@ function SelectionResults({
 }: {
   chainId: number;
   market: NormalizedMarket;
+  matrix: CollateralMatrix;
   mode: ViewMode;
   matrixView: MatrixViewId;
   graphAddress: string | null;
@@ -366,7 +381,6 @@ function SelectionResults({
   header: HeaderSelection | null;
 }) {
   const navigate = useNavigate();
-  const matrix = useMemo(() => buildCollateralMatrix(market), [market]);
   const selection: DiscoverySelection | null =
     mode === 'graph' && graphAddress
       ? { kind: 'graph', address: graphAddress }
@@ -375,7 +389,7 @@ function SelectionResults({
         : header
           ? { kind: 'header', ...header }
           : null;
-  if (!selection || !matrix) return null;
+  if (!selection) return null;
 
   const resolved = resolveDiscoverySelection(market, matrix, selection);
   const lendVault = resolved.lendAddress ? market.vaultByAddress.get(resolved.lendAddress) : undefined;

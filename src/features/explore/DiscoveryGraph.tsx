@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { Box, Typography, useTheme } from '@mui/material';
 
 import { tokenImageUrl } from '@/api/euler';
@@ -13,6 +14,10 @@ interface DiscoveryGraphProps {
 
 export function DiscoveryGraph({ chainId, diagram, selectedAddress, onSelect }: DiscoveryGraphProps) {
   const theme = useTheme();
+  // Several graphs can be mounted at once and share vault addresses, so clip
+  // ids must be unique per instance to avoid cross-graph url(#...) collisions.
+  const instanceId = useId().replace(/[^a-zA-Z0-9]/g, '');
+  const clipId = (address: string) => `graph-clip-${instanceId}-${address.replace(/[^a-z0-9]/g, '')}`;
   const enlarged = getEnlargedDiagram(diagram);
   const connected = selectedAddress ? getGraphConnectedAddresses(diagram, selectedAddress) : new Set<string>();
   const isNodeHighlighted = (address: string) => !selectedAddress || address === selectedAddress || connected.has(address);
@@ -94,7 +99,7 @@ export function DiscoveryGraph({ chainId, diagram, selectedAddress, onSelect }: 
                 style={{ cursor: 'pointer', transition: 'opacity 0.2s' }}
               >
                 <circle cx={node.x} cy={node.y} r={enlarged.nodeRadius + 6} fill="transparent" pointerEvents="all" />
-                <clipPath id={`graph-clip-${node.address.replace(/[^a-z0-9]/g, '')}`}>
+                <clipPath id={clipId(node.address)}>
                   <circle cx={node.x} cy={node.y} r={enlarged.nodeRadius} />
                 </clipPath>
                 <circle
@@ -124,7 +129,7 @@ export function DiscoveryGraph({ chainId, diagram, selectedAddress, onSelect }: 
                   height={enlarged.nodeRadius * 2}
                   pointerEvents="none"
                   href={tokenImageUrl(chainId, node.assetAddress)}
-                  clipPath={`url(#graph-clip-${node.address.replace(/[^a-z0-9]/g, '')})`}
+                  clipPath={`url(#${clipId(node.address)})`}
                 />
                 <text
                   x={label.x}

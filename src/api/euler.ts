@@ -35,9 +35,13 @@ function labelsBase(): string {
   return getRuntimeConfig().eulerApi.labelsBaseUrl;
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(url: string, init?: RequestInit, missingValue?: T): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
+    // The labels CDN returns 403 for paths that do not exist, while the upstream repository
+    // returns 404. A configured chain without optional labels is valid and simply has no
+    // curated products/entities yet; genuine server/network failures still propagate.
+    if (missingValue !== undefined && (res.status === 403 || res.status === 404)) return missingValue;
     throw new Error(
       `Euler API ${url.replace(apiBase(), '').replace(v3Base(), '').replace(labelsBase(), '')} failed: ${res.status} ${res.statusText}`
     );
@@ -47,7 +51,8 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 const getJson = <T>(path: string) => requestJson<T>(`${apiBase()}${path}`, { headers: { Accept: 'application/json' } });
 const getV3Json = <T>(path: string) => requestJson<T>(`${v3Base()}${path}`, { headers: { Accept: 'application/json' } });
-const getLabelsJson = <T>(path: string) => requestJson<T>(`${labelsBase()}${path}`, { headers: { Accept: 'application/json' } });
+const getLabelsJson = <T>(path: string, missingValue?: T) =>
+  requestJson<T>(`${labelsBase()}${path}`, { headers: { Accept: 'application/json' } }, missingValue);
 const postV3Json = <T>(path: string, body: unknown) =>
   requestJson<T>(`${v3Base()}${path}`, {
     method: 'POST',
@@ -69,19 +74,19 @@ export const fetchTokenList = (chainId: number) => getJson<EulerTokenList>(`/int
 
 // GET {labelsBaseUrl}/{chainId}/products.json
 export const fetchProducts = async (chainId: number) => {
-  const raw = await getLabelsJson<Record<string, unknown>>(`/${chainId}/products.json`);
+  const raw = await getLabelsJson<Record<string, unknown>>(`/${chainId}/products.json`, {});
   return stripInjectedKeys<EulerProducts>(raw, (v) => !!v && typeof v === 'object' && Array.isArray((v as { vaults?: unknown }).vaults));
 };
 
 // GET {labelsBaseUrl}/{chainId}/entities.json
 export const fetchEntities = async (chainId: number) => {
-  const raw = await getLabelsJson<Record<string, unknown>>(`/${chainId}/entities.json`);
+  const raw = await getLabelsJson<Record<string, unknown>>(`/${chainId}/entities.json`, {});
   return stripInjectedKeys<EulerEntities>(raw, (v) => !!v && typeof v === 'object');
 };
 
 // GET {labelsBaseUrl}/{chainId}/earn-vaults.json
 export const fetchEarnVaultLabels = async (chainId: number): Promise<EulerEarnVaultLabel[]> => {
-  const raw = await getLabelsJson<unknown[]>(`/${chainId}/earn-vaults.json`);
+  const raw = await getLabelsJson<unknown[]>(`/${chainId}/earn-vaults.json`, []);
 
   return raw.flatMap((entry) => {
     if (typeof entry === 'string') return [{ address: entry }];

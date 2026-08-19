@@ -29,6 +29,11 @@ async function getExploreSdk(chainId: number) {
       });
     });
     sdkPromises.set(chainId, sdkPromise);
+    // Evict failed initializations (chunk-load errors, bad RPC config) so the
+    // next call retries instead of replaying the cached rejection forever.
+    sdkPromise.catch(() => {
+      if (sdkPromises.get(chainId) === sdkPromise) sdkPromises.delete(chainId);
+    });
   }
 
   return sdkPromise;
