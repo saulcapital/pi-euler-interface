@@ -1,19 +1,24 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Box, Button, Chip, CircularProgress, Grid, Paper, Stack, Tab, Tabs, Typography, useTheme } from '@mui/material';
+import { useQueries } from '@tanstack/react-query';
+import { Alert, Box, Button, Chip, CircularProgress, Grid, Paper, Stack, Tab, Tabs, Typography, useTheme } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { formatUnits } from 'viem';
 import { useAccount } from 'wagmi';
 
 import { fetchAccountPortfolio, tokenImageUrl } from '@/api/euler';
-import { useNetworkParam } from 'hooks/useNetworkParam';
+import { getRuntimeConfig } from '@/appconfig/runtime';
+import ChainFilter, { ChainFilterValue } from 'components/ChainFilter';
+import { ChainBadge } from 'components/ChainIcon';
 import ConnectButtonCustom from 'components/ConnectButtonCustom';
 import { TokenIcon } from 'components/TokenIcon';
 import { useCopyToClipboard } from 'hooks/useCopyToClipboard';
 import { EulerBorrowPosition, EulerDepositPosition } from 'types/euler';
 import { formatShortUSDS } from 'utils/formatters';
+
+type ChainedBorrowPosition = EulerBorrowPosition & { chainId: number };
+type ChainedDepositPosition = EulerDepositPosition & { chainId: number };
 
 function fmtUsd(value: number): string {
   if (!Number.isFinite(value)) return '—';
@@ -43,14 +48,20 @@ export default function PortfolioPage() {
   const navigate = useNavigate();
   const copy = useCopyToClipboard();
   const { address } = useAccount();
-  const { chainId } = useNetworkParam();
+  const { chains } = getRuntimeConfig();
   const [tab, setTab] = useState(0);
+  const [chainFilter, setChainFilter] = useState<ChainFilterValue>('all');
 
-  const portfolioQuery = useQuery({
-    queryKey: ['euler', 'portfolio', chainId, address],
-    enabled: Boolean(address),
-    queryFn: () => fetchAccountPortfolio(chainId, address as string),
-    refetchInterval: 30_000
+  const portfolioQueries = useQueries({
+    queries: chains.map((chain) => ({
+      queryKey: ['euler', 'portfolio', chain.chainId, address],
+      enabled: Boolean(address),
+      queryFn: async () => ({
+        chainId: chain.chainId,
+        response: await fetchAccountPortfolio(chain.chainId, address as string)
+      }),
+      refetchInterval: 30_000
+    }))
   });
 
   const healthColor = (hf: number) =>
@@ -67,24 +78,42 @@ export default function PortfolioPage() {
       </Box>
     );
 
-  if (portfolioQuery.isLoading)
+  if (portfolioQueries.some((query) => query.isPending))
     return (
       <Box sx={{ display: 'grid', placeItems: 'center', minHeight: 420 }}>
         <CircularProgress />
       </Box>
     );
 
-  const portfolio = portfolioQuery.data?.data?.portfolio;
-  if (portfolioQuery.error || !portfolio)
-    return (
-      <Paper sx={{ padding: 3, border: `1px solid ${theme.palette.divider}` }}>
-        <Typography color="error">Failed to load your portfolio. Please try again in a moment.</Typography>
-      </Paper>
-    );
+  const selectedPortfolioQueries = portfolioQueries.filter((_, index) => chainFilter === 'all' || chains[index]?.chainId === chainFilter);
+  const successfulPortfolios = selectedPortfolioQueries.flatMap((query) => {
+    const data = query.data;
+    const portfolio = data?.response.data?.portfolio;
+    return data && portfolio ? [{ chainId: data.chainId, portfolio }] : [];
+  });
+  const failedQueryCount = selectedPortfolioQueries.filter((query) => query.isError).length;
 
-  const totals = portfolio.totals;
-  const borrows = portfolio.borrows ?? [];
-  const deposits = portfolio.savings ?? [];
+  const totals = successfulPortfolios.reduce(
+    (aggregate, { portfolio }) => {
+      const suppliedValueUsd = portfolio.totals?.suppliedValueUsd ?? 0;
+      const netApy = portfolio.totals?.netApy ?? 0;
+      return {
+        suppliedValueUsd: aggregate.suppliedValueUsd + suppliedValueUsd,
+        borrowedValueUsd: aggregate.borrowedValueUsd + (portfolio.totals?.borrowedValueUsd ?? 0),
+        netAssetValueUsd: aggregate.netAssetValueUsd + (portfolio.totals?.netAssetValueUsd ?? 0),
+        weightedNetApy: aggregate.weightedNetApy + suppliedValueUsd * netApy
+      };
+    },
+    { suppliedValueUsd: 0, borrowedValueUsd: 0, netAssetValueUsd: 0, weightedNetApy: 0 }
+  );
+  const aggregateNetApy = totals.suppliedValueUsd > 0 ? totals.weightedNetApy / totals.suppliedValueUsd : 0;
+  const borrows: ChainedBorrowPosition[] = successfulPortfolios.flatMap(({ chainId, portfolio }) =>
+    (portfolio.borrows ?? []).map((position) => ({ ...position, chainId }))
+  );
+  const deposits: ChainedDepositPosition[] = successfulPortfolios.flatMap(({ chainId, portfolio }) =>
+    (portfolio.savings ?? []).map((deposit) => ({ ...deposit, chainId }))
+  );
+  const emptyScope = chainFilter === 'all' ? 'across all networks' : 'on this network';
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, margin: '0 auto' }}>
@@ -97,17 +126,29 @@ export default function PortfolioPage() {
           onDelete={() => copy.copyToClipboard(address)}
           deleteIcon={<ContentCopyIcon sx={{ fontSize: 15 }} />}
         />
+        <Box sx={{ width: { xs: '100%', sm: 200 }, maxWidth: 220, marginLeft: { sm: 'auto' } }}>
+          <ChainFilter value={chainFilter} onChange={setChainFilter} />
+        </Box>
       </Box>
+
+      {failedQueryCount > 0 && (
+        <Alert severity="warning" sx={{ marginBottom: 2 }}>
+          {failedQueryCount === 1 ? 'One network could not be loaded.' : `${failedQueryCount} networks could not be loaded.`}
+          {successfulPortfolios.length > 0
+            ? ' Showing portfolio data from the selected networks that responded.'
+            : ' No portfolio data is available for the selected network scope.'}
+        </Alert>
+      )}
 
       {/* Summary */}
       <Grid container spacing={2} sx={{ marginBottom: 3 }}>
-        <SummaryStat label="Net worth" value={fmtUsd(totals?.netAssetValueUsd ?? 0)} />
-        <SummaryStat label="Supplied" value={fmtUsd(totals?.suppliedValueUsd ?? 0)} />
-        <SummaryStat label="Borrowed" value={fmtUsd(totals?.borrowedValueUsd ?? 0)} />
+        <SummaryStat label="Net worth" value={fmtUsd(totals.netAssetValueUsd)} />
+        <SummaryStat label="Supplied" value={fmtUsd(totals.suppliedValueUsd)} />
+        <SummaryStat label="Borrowed" value={fmtUsd(totals.borrowedValueUsd)} />
         <SummaryStat
           label="Net APY"
-          value={`${(totals?.netApy ?? 0).toFixed(2)}%`}
-          valueColor={(totals?.netApy ?? 0) >= 0 ? theme.palette.success.main : theme.palette.error.main}
+          value={`${aggregateNetApy.toFixed(2)}%`}
+          valueColor={aggregateNetApy >= 0 ? theme.palette.success.main : theme.palette.error.main}
         />
       </Grid>
 
@@ -119,33 +160,33 @@ export default function PortfolioPage() {
         <Box sx={{ padding: { xs: 1.5, sm: 2.5 } }}>
           {tab === 0 ? (
             borrows.length === 0 ? (
-              <EmptyState text="You have no open borrow positions on this network." />
+              <EmptyState text={`You have no open borrow positions ${emptyScope}.`} />
             ) : (
               <Stack spacing={1.5}>
                 {borrows.map((position) => (
                   <PositionRow
-                    key={`${position.collateralVault.address}-${position.borrowVault.address}-${position.subAccount}`}
-                    chainId={chainId}
+                    key={`${position.chainId}-${position.collateralVault.address}-${position.borrowVault.address}-${position.subAccount}`}
                     position={position}
                     healthColor={healthColor}
                     onManage={() =>
-                      navigate(`/portfolio/position/${position.collateralVault.address}/${position.borrowVault.address}?network=${chainId}`)
+                      navigate(
+                        `/portfolio/position/${position.collateralVault.address}/${position.borrowVault.address}?network=${position.chainId}`
+                      )
                     }
                   />
                 ))}
               </Stack>
             )
           ) : deposits.length === 0 ? (
-            <EmptyState text="You have no deposits on this network." />
+            <EmptyState text={`You have no deposits ${emptyScope}.`} />
           ) : (
             <Stack spacing={1.5}>
               {deposits.map((deposit) => (
                 <DepositRow
-                  key={`${deposit.vault.address}-${deposit.subAccount}`}
-                  chainId={chainId}
+                  key={`${deposit.chainId}-${deposit.vault.address}-${deposit.subAccount}`}
                   deposit={deposit}
-                  onSupply={() => navigate(depositHref(deposit, chainId, 'supply'))}
-                  onWithdraw={() => navigate(depositHref(deposit, chainId, 'withdraw'))}
+                  onSupply={() => navigate(depositHref(deposit, deposit.chainId, 'supply'))}
+                  onWithdraw={() => navigate(depositHref(deposit, deposit.chainId, 'withdraw'))}
                 />
               ))}
             </Stack>
@@ -179,13 +220,11 @@ function SummaryStat({ label, value, valueColor }: { label: string; value: strin
 }
 
 function PositionRow({
-  chainId,
   position,
   healthColor,
   onManage
 }: {
-  chainId: number;
-  position: EulerBorrowPosition;
+  position: ChainedBorrowPosition;
   healthColor: (hf: number) => string;
   onManage: () => void;
 }) {
@@ -213,13 +252,13 @@ function PositionRow({
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <TokenIcon
               symbol={collateral.asset.symbol}
-              logoUrl={tokenImageUrl(chainId, collateral.asset.address)}
+              logoUrl={tokenImageUrl(position.chainId, collateral.asset.address)}
               avatarProps={{ sx: { width: 32, height: 32, fontSize: 11 } }}
             />
             <ArrowForwardIcon sx={{ fontSize: 16, color: theme.palette.grey[500] }} />
             <TokenIcon
               symbol={borrow.asset.symbol}
-              logoUrl={tokenImageUrl(chainId, borrow.asset.address)}
+              logoUrl={tokenImageUrl(position.chainId, borrow.asset.address)}
               avatarProps={{ sx: { width: 32, height: 32, fontSize: 11 } }}
             />
             <Box sx={{ minWidth: 0 }}>
@@ -229,6 +268,10 @@ function PositionRow({
               <Typography variant="caption" color="text.secondary">
                 Borrow position
               </Typography>
+              <ChainBadge
+                chainId={position.chainId}
+                sx={{ height: 20, marginTop: 0.5, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+              />
             </Box>
           </Box>
         </Grid>
@@ -259,17 +302,7 @@ function PositionRow({
   );
 }
 
-function DepositRow({
-  chainId,
-  deposit,
-  onSupply,
-  onWithdraw
-}: {
-  chainId: number;
-  deposit: EulerDepositPosition;
-  onSupply: () => void;
-  onWithdraw: () => void;
-}) {
+function DepositRow({ deposit, onSupply, onWithdraw }: { deposit: ChainedDepositPosition; onSupply: () => void; onWithdraw: () => void }) {
   const theme = useTheme();
   const isEarn = deposit.vault.type === 'EulerEarn';
   const assets = rawAmount(deposit.assets, deposit.vault.asset.decimals);
@@ -280,7 +313,7 @@ function DepositRow({
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <TokenIcon
               symbol={deposit.vault.asset.symbol}
-              logoUrl={tokenImageUrl(chainId, deposit.vault.asset.address)}
+              logoUrl={tokenImageUrl(deposit.chainId, deposit.vault.asset.address)}
               avatarProps={{ sx: { width: 32, height: 32, fontSize: 11 } }}
             />
             <Box sx={{ minWidth: 0 }}>
@@ -293,6 +326,10 @@ function DepositRow({
               <Typography variant="caption" color="text.secondary">
                 {deposit.vault.asset.symbol}
               </Typography>
+              <ChainBadge
+                chainId={deposit.chainId}
+                sx={{ height: 20, marginTop: 0.5, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+              />
             </Box>
           </Box>
         </Grid>
